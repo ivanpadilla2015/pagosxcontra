@@ -1,0 +1,158 @@
+
+    table{
+        table-layout: fixed;
+        width: 100%;
+    }
+
+    table {border-collapse: collapse;}
+
+    td {padding: 6px;}
+    
+   .c1 {
+        /*border: 1px solid blue;*/
+        width: 15%;
+        word-wrap: break-word;
+    }
+   .c2 {
+        /*border: 1px solid blue;*/
+        width: 35%;
+        word-wrap: break-word;
+    }
+   .c3 {
+        /*border: 1px solid blue;*/
+        width: 25%;
+        word-wrap: break-word;
+        height: 5px;
+    }
+
+    .t1 {
+        border: 1px solid #000000;
+        width: 20%;
+        word-wrap: break-word;
+        font-size: 10px;
+    }
+
+    .colu {
+      border: 1px solid #000000;
+      font-family: Arial;
+      font-size: 10px;
+
+    }
+    .coluy {
+       font-size: 8px;
+    }
+    .colul {
+      border: 1px solid #000000;
+      font-size: 8px;
+    }
+    .coluyy {
+      border: 1px solid #000000;
+      font-size: 6px;
+    }
+    .coluyy1 {
+      border: 1px solid #000000;
+      font-family: Arial bold;
+      font-size: 11px;
+    }
+
+    .coluyy2 {
+      border: 1px solid #000000;
+      font-family: Arial bold;
+      font-size: 10px;
+    }
+
+    .colacta{
+      border: 1px solid #000000;
+      background-color: #96b4d8;
+      font-family: Arial bold;
+      font-size: 9px;
+    }
+    .col24 {
+        border: 1px solid #000000;
+        width: 15%;
+        font-family: arial;
+        font-size: 11px;
+      }
+
+      .col25 {
+        border: 1px solid #000000;
+        width: 30%;
+        font-family: arial;
+        font-size: 11px;
+      }
+
+      .col26 {
+        border: 1px solid #000000;
+        width: 70%;
+        font-family: arial;
+        font-size: 11px;
+      }
+
+      .col23{
+        border: 1px solid #0c0c0c;
+        width: 50%;
+        font-family: arial;
+        font-size: 12px;
+      }
+
+      .cuadrado {
+        width: 9px;           /* Ancho de 150 píxeles */
+        height: 9px;          /* Alto de 150 píxeles */
+                /* Fondo de color rojo */
+        border: 1px solid #000; /* Borde color negro y de 1 píxel de grosor */
+      }
+
+      .fondofila {
+        background-color: #96b4d8;
+      }
+
+    .colu2 {
+        border: 1px solid #000000;
+        font-size: 12px;
+      }
+  
+
+    .t2 {
+        border: 1px solid #000000;
+        width: 15%;
+        word-wrap: break-word;
+        font-size: 14px;
+    }
+
+    .contenedor{
+        position: relative;
+        text-align: center;
+        width: 200px;
+       
+    }
+   
+    .texto-encima{
+        position: absolute;
+        top: 2;      
+        left: 2%;
+        width: 45%;
+        font-size: 10px;
+        text-align: left;
+        font-family: Vegur, 'PT Sans', Verdana, sans-serif;
+    }
+
+    .texto-encima2{
+        position: absolute;
+        top: 2;      
+        right: 2%;
+        width: 45%;
+        font-size: 7px;
+        text-align: left;
+        
+    }
+
+    .texto-encima3{
+        position: absolute;
+        top: 18;
+      
+    }
+
+    .flex-container{
+      display: flex;
+      background-color: aqua;
+    }
