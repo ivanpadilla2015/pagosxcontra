@@ -28,7 +28,7 @@ new class extends Component
     protected function rules(): array
     {
         return [
-            'proveedor_id' => ['required_if:tipo_adquisicion,servicio', 'nullable', 'exists:proveedors,id'],
+            'proveedor_id' => ['nullable', 'exists:proveedors,id'],
             'municipio_id' => ['required', 'exists:municipios,id'],
             'tipo_adquisicion' => ['required', 'in:bien,servicio'],
             'porcentaje' => ['required', 'numeric', 'min:0', 'max:100'],
@@ -71,10 +71,6 @@ new class extends Component
     {
         $data = $this->validate();
 
-        if ($this->tipo_adquisicion === 'bien') {
-            $data['proveedor_id'] = null;
-        }
-
         if ($this->editingId) {
             ReteicaTarifa::findOrFail($this->editingId)->update($data);
             session()->flash('message', 'Tarifa actualizada correctamente.');
@@ -82,7 +78,7 @@ new class extends Component
             $query = ReteicaTarifa::where('municipio_id', $data['municipio_id'])
                 ->where('tipo_adquisicion', $data['tipo_adquisicion']);
 
-            if ($data['proveedor_id']) {
+            if (!empty($data['proveedor_id'])) {
                 $query->where('proveedor_id', $data['proveedor_id']);
             } else {
                 $query->whereNull('proveedor_id');
@@ -164,8 +160,8 @@ new class extends Component
                 @error('tipo_adquisicion') <p class="mt-1 text-xs text-rose-500">{{ $message }}</p> @enderror
             </div>
             <div>
-                <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Proveedor {{ $tipo_adquisicion === 'servicio' ? '*' : '' }}</label>
-                <select wire:model="proveedor_id" class="form-input w-full @error('proveedor_id') border-rose-500 @enderror" {{ $tipo_adquisicion === 'bien' ? 'disabled' : '' }}>
+                <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Proveedor</label>
+                <select wire:model="proveedor_id" class="form-input w-full @error('proveedor_id') border-rose-500 @enderror">
                     <option value="">Ninguno</option>
                     @foreach ($this->proveedores as $p)
                         <option value="{{ $p->id }}">{{ $p->nombre }}</option>
@@ -225,7 +221,7 @@ new class extends Component
                                 {{ ($tarifa->tipo_adquisicion ?? 'servicio') === 'bien' ? 'Bien' : 'Servicio' }}
                             </span>
                         </td>
-                        <td class="px-4 py-3 font-medium text-gray-800 dark:text-gray-100">{{ $tarifa->proveedor->nombre ?? 'Regional (sin proveedor)' }}</td>
+                        <td class="px-4 py-3 font-medium text-gray-800 dark:text-gray-100">{{ $tarifa->proveedor->nombre ?? 'Genérica (todos)' }}</td>
                         <td class="px-4 py-3 text-gray-600 dark:text-gray-300">{{ $tarifa->municipio->nombre ?? '-' }}</td>
                         <td class="px-4 py-3 text-right text-gray-600 dark:text-gray-300">{{ $tarifa->porcentaje }}%</td>
                         <td class="px-4 py-3 text-gray-600 dark:text-gray-300">{{ $tarifa->codigo_actividad ?? '—' }}</td>

@@ -70,7 +70,7 @@ class CalculadoraRetenciones
                     }
                     $pct = $tarifa->porcentaje;
                 } else {
-                    $tarifa = $this->resolverReteicaBien();
+                    $tarifa = $this->resolverReteicaBien($proveedor, $linea);
                     if (!$tarifa) {
                         $pendientes[] = $retencion;
                         continue;
@@ -149,17 +149,37 @@ class CalculadoraRetenciones
     }
 
     /**
-     * Resuelve la tarifa de Reteica bien (municipio de la regional del usuario actual).
+     * Resuelve la tarifa de Reteica bien.
+     * Prioridad: tarifa específica del proveedor > tarifa genérica (sin proveedor).
      */
-    private function resolverReteicaBien(): ?ReteicaTarifa
+    private function resolverReteicaBien($proveedor, FacturaLinea $linea): ?ReteicaTarifa
     {
-        $user = Auth::user();
-        if (!$user || !$user->regional || !$user->regional->municipio_id) {
+        $municipioId = $linea->municipio_id;
+
+        if (!$municipioId) {
+            $user = Auth::user();
+            $municipioId = $user?->regional?->municipio_id;
+        }
+
+        if (!$municipioId) {
             return null;
         }
 
+        // 1. Buscar tarifa específica del proveedor
+        if ($proveedor) {
+            $tarifa = ReteicaTarifa::where('proveedor_id', $proveedor->id)
+                ->where('municipio_id', $municipioId)
+                ->where('tipo_adquisicion', 'bien')
+                ->first();
+
+            if ($tarifa) {
+                return $tarifa;
+            }
+        }
+
+        // 2. Fallback: tarifa genérica (sin proveedor)
         return ReteicaTarifa::whereNull('proveedor_id')
-            ->where('municipio_id', $user->regional->municipio_id)
+            ->where('municipio_id', $municipioId)
             ->where('tipo_adquisicion', 'bien')
             ->first();
     }

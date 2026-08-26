@@ -52,9 +52,10 @@ Route::middleware(['auth:sanctum', 'verified'])->group(function () {
     Route::get('contratos/importar-asignacion/plantilla/{contratoId}/{rubroId}', [\App\Http\Controllers\ItemContratoController::class, 'plantillaExcel'])->name('importar.asignacion.plantilla');
     Route::livewire('contratos/facturacion/{id?}', 'contratos.facturacion')->name('facturacion');
 
-    // Facturas - listado y edición
+    // Facturas - listado, edición y PDF
     Route::livewire('contratos/facturas', 'contratos.facturas-lista')->name('facturas');
     Route::livewire('contratos/facturas/{id}/editar', 'contratos.factura-editar')->name('facturacion.editar');
+    Route::get('contratos/facturas/{id}/pdf', [\App\Http\Controllers\FacturaPdfController::class, 'show'])->name('facturas.pdf');
 
     // Facturar (nueva forma)
     Route::livewire('contratos/facturar/{id?}', 'contratos.facturar')->name('facturar');

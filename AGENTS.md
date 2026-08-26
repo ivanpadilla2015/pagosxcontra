@@ -86,6 +86,7 @@ Contrato (1) ──< (N) Movirubro          (presupuesto: valor y saldo)
 | **Facturación (crear)** | `/contratos/facturacion` | `contratos/facturacion.blade.php` |
 | **Facturación (listar)** | `/contratos/facturas` | `contratos/facturas-lista.blade.php` |
 | **Facturación (editar)** | `/contratos/facturas/{id}/editar` | `contratos/factura-editar.blade.php` |
+| **Facturación (PDF)** | `/contratos/facturas/{id}/pdf` | `FacturaPdfController@show` |
 | **Facturar (nuevo)** | `/contratos/facturar` | `contratos/facturar.blade.php` |
 | Proveedores | `/proveedores/*` | `proveedors/proveedors.blade.php` |
 | Retenciones | `/proveedores/retenciones` | `retenciones/retenciones.blade.php` |
@@ -143,7 +144,7 @@ $proveedor->retencionesAplicables; // Collection<Retencion>
 `app/Services/CalculadoraRetenciones.php`:
 - `calcular(FacturaLinea $linea)` → retorna `['calculadas' => [...], 'pendientes' => [...]]`
 - `calcularYPersistir(FacturaLinea $linea)` → calcula y guarda en `factura_linea_retenciones`
-- Reteica bien: usa `resolverReteicaBien()` → busca tarifa por `proveedor_id IS NULL AND municipio_id = regional.municipio_id AND tipo = 'bien'`
+- Reteica bien: usa `resolverReteicaBien($proveedor, $linea)` → prioridad: tarifa específica del proveedor (proveedor_id + municipio_id + tipo='bien') > tarifa genérica (proveedor_id IS NULL)
 - Reteica servicio: usa `resolverReteicaServicio($proveedor, $linea)` → busca tarifa por `proveedor_id + municipio_id`
 - Estampilla: usa `obtenerTerritoriales($linea)` → solo si `linea.estampilla_retencion_id` está definido (selección manual)
 
@@ -574,7 +575,7 @@ Grupo "Contratos" con sub-items: Obligación, Importar Obligaciones, Riesgos, Im
 - Campo `estampilla_retencion_id` en `factura_lineas` (FK a retenciones)
 - Campo `tipo` (bien/servicio) en productos
 - Reteica servicio: tarifa por proveedor+municipio con `tipo_adquisicion` (bien/servicio)
-- Reteica bien: tarifa por municipio regional con `tipo_adquisicion` = 'bien'
+- Reteica bien: tarifa por municipio regional con `tipo_adquisicion` = 'bien'. Prioridad: específica del proveedor > genérica (proveedor_id IS NULL)
 - Regional con `municipio_id` (para Reteica bien)
 - **Anti doble clic**: propiedad `$guardando` + botón deshabilitado con "Creando..." en creación de facturas
 - **Validación con alertas**: mensajes flash de error visibles (número, fecha, líneas)
@@ -652,7 +653,6 @@ Grupo "Contratos" con sub-items: Obligación, Importar Obligaciones, Riesgos, Im
 ### ❌ Pendiente
 - Gestión de estados completa (borrador → emitida → pagada → anulada)
 - Relación `Proveedor::facturas()` (falta en el modelo)
-- Exportar PDF de facturas individuales
 - Paginación en reportes de retenciones
 - **Reporte de imprimir informe**: definir formato y lógica para `imprimirInforme()`
 
@@ -699,6 +699,7 @@ Grupo "Contratos" con sub-items: Obligación, Importar Obligaciones, Riesgos, Im
 2. Generales del proveedor (Derivación A), parafiscales del producto, territoriales del municipio
 3. Las tarifas son **datos editables**, no código
 4. Reteica servicio se captura una vez por proveedor+municipio
+4a. Reteica bien permite proveedor específico (opcional). Si existe tarifa del proveedor, se usa. Si no, fallback a la genérica
 5. Se persiste el % aplicado (histórico inmutable)
 6. El municipio va por **línea** (no por factura)
 7. Parafiscales se asignan manualmente por producto (checkboxes)
@@ -757,3 +758,6 @@ Grupo "Contratos" con sub-items: Obligación, Importar Obligaciones, Riesgos, Im
 57. **Backups**: spatie/laravel-backup con `relative_path => base_path()` para incluir BD + fuente en el zip. `database_dump_compressor => null` (gzip no disponible en Windows). Notificaciones mail deshabilitadas. `exec()` para ejecutar artisan desde web (fallback a CLI si está deshabilitado)
 58. **Programación backups**: lee `backup_enabled` y `backup_time` de tabla `settings` (no de config). Try-catch por si la tabla no existe. `install-scheduler.bat` crea tarea Windows Task Scheduler
 59. **Campo `municipio_id` en productos**: nullable FK a `municipios`. Solo visible/editable para productos tipo "Servicio" (en CRUD de productos). Auto-asigna a `municipio_linea` al facturar (facturacion, facturar, factura-editar). Si el servicio no tiene municipio, se muestra toast de warning y se requiere selección manual. En `ProductosImport` se importa columna opcional "Municipio" (nombre). En `ProductosPlantillaExport` se agrega columna "Municipio (opcional)"
+60. **PDF de factura individual**: `FacturaPdfController@show` genera PDF con barryvdh/laravel-dompdf. Vista `reportes/factura-pdf.blade.php`. Ruta `GET contratos/facturas/{id}/pdf` → `facturas.pdf`. Botón de descarga visible en facturas con estado emitida y pagada. Todos los cálculos se hacen en el controlador (no en la vista) para evitar errores de tipo con DomPDF. Muestra: encabezado con logo, datos factura/proveedor/contrato, tabla de productos, retenciones por línea, resumen (subtotal, IVA, total sin retenciones, retenciones, total a pagar), desglose de retenciones agrupado por nombre+porcentaje+municipio con columna de tipo (bien/servicio), y total por porcentaje
+61. **Reteica bien con prioridad de proveedor**: `resolverReteicaBien($proveedor, $linea)` busca primero tarifa específica del proveedor (proveedor_id + municipio_id + tipo='bien'). Si no existe, cae en la genérica (proveedor_id IS NULL). CRUD de reteica-tarifas permite seleccionar proveedor para tipo bien (antes forzaba null). Índice único de 3 columnas: `(proveedor_id, municipio_id, tipo_adquisicion)` reemplaza al antiguo de 2 columnas
+62. **Migración limpia de índices reteica**: se eliminó el índice único `reteica_tarifas_proveedor_id_municipio_id_unique` (2 columnas) que impedía crear tarifas para mismo proveedor+municipio con tipos diferentes. Solo queda el de 3 columnas `reteica_prov_muni_tipo_UNIQUE`
