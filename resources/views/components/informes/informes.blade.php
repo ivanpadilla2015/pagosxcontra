@@ -63,6 +63,11 @@ new class extends Component
     public string $modalAlertaMensaje = '';
     public string $modalAlertaTipo = 'error';
 
+    // Modal de pagos del informe
+    public bool $modalPagosOpen = false;
+    public string $modalPagosInforme = '';
+    public array $modalPagosLista = [];
+
     // Obligaciones
     public array $obligacionesList = [];
     public bool $modalObligacionesMasivoOpen = false;
@@ -166,6 +171,25 @@ new class extends Component
         $this->modalAlerta = false;
     }
 
+    public function verPagosInforme(int $informeId): void
+    {
+        $informe = Informe::findOrFail($informeId);
+        $this->modalPagosInforme = $informe->cansecu_infor . ' - ' . $informe->corresponde_texto_periodo;
+        $this->modalPagosLista = Pago::where('contrato_id', $informe->contrato_id)
+            ->where('cansecu_infor', $informe->cansecu_infor)
+            ->where('estado', 'cerrado')
+            ->get()
+            ->toArray();
+        $this->modalPagosOpen = true;
+    }
+
+    public function cerrarModalPagos(): void
+    {
+        $this->modalPagosOpen = false;
+        $this->modalPagosInforme = '';
+        $this->modalPagosLista = [];
+    }
+
     public function buscarContrato(): void
     {
         $this->resetValidation();
@@ -230,8 +254,11 @@ new class extends Component
             ->where('cansecu_infor', $this->cansecu_infor)
             ->sum('valor_total');
 
-        // saldo_viene = saldo actual del contrato (suma de saldo_rubro de movirubros)
-        $this->saldo_viene = $contrato->saldo;
+        // saldo_viene = suma de total_info de informes anteriores (no anulados)
+        $this->saldo_viene = Informe::where('contrato_id', $this->contratoId)
+            ->where('estado', '!=', 'anulado')
+            ->where('cansecu_infor', '<', $this->cansecu_infor)
+            ->sum('total_info');
 
         $this->novedad = 'N/A';
         $this->fiducia = 'N/A';
@@ -240,9 +267,10 @@ new class extends Component
         $this->anexos = 'Ninguno';
         $this->recomendacion = 'Ninguna';
 
-        // % Cumplimiento: porcentaje ejecutado (descontado) del contrato
+        // % Cumplimiento: (saldo_viene + total_info) / valorTotal * 100
+        $ejecutado = $this->saldo_viene + $this->total_info;
         $this->porcentaje_cumplimiento = $contrato->valorTotal > 0
-            ? round((($contrato->valorTotal - $this->saldo_viene) / $contrato->valorTotal) * 100, 2)
+            ? round(($ejecutado / $contrato->valorTotal) * 100, 2)
             : 0;
 
         $this->obligacionesList = $contrato->obligaciones->map(fn ($o) => [
@@ -389,8 +417,10 @@ new class extends Component
         ];
 
         DB::transaction(function () use ($contrato, $contratoId, $userId, $mesesFaltantes, $meses) {
-            // saldo_viene = saldo actual del contrato (suma de saldo_rubro de movirubros)
-            $saldoViene = $contrato->saldo;
+            // saldo_viene inicial = suma de total_info de informes ya existentes (no anulados)
+            $saldoViene = Informe::where('contrato_id', $contratoId)
+                ->where('estado', '!=', 'anulado')
+                ->sum('total_info');
 
             foreach ($mesesFaltantes as $mesFaltante) {
                 // Parsear "Marzo 2026" → nombreMes=Marzo, anio=2026
@@ -406,9 +436,11 @@ new class extends Component
                     $fechaInforme->subDay();
                 }
 
-                // % Cumplimiento: porcentaje ejecutado (descontado) del contrato
+                // % Cumplimiento: (saldo_viene + total_info) / valorTotal * 100
+                // total_info = 0 para faltantes, pero acumulamos saldo_viene para el siguiente
+                $ejecutado = $saldoViene + 0;
                 $porcentaje = $contrato->valorTotal > 0
-                    ? round((($contrato->valorTotal - $saldoViene) / $contrato->valorTotal) * 100, 2)
+                    ? round(($ejecutado / $contrato->valorTotal) * 100, 2)
                     : 0;
 
                 $contrato->update(['cansecu_infor' => $contrato->cansecu_infor + 1]);
@@ -432,6 +464,31 @@ new class extends Component
                 ]);
 
                 $this->crearSnapshotRegistros($nuevoInforme);
+
+                // Copiar obligaciones del contrato con confirmar = "NO"
+                foreach ($contrato->obligaciones as $obligacion) {
+                    $nuevoInforme->informeobligaciones()->create([
+                        'numeral' => $obligacion->numeral,
+                        'obligacion_deta' => $obligacion->obligacion_deta,
+                        'entregable' => 'No se requirió en este periodo',
+                        'confirmar' => 'NO',
+                        'contrato_id' => $contratoId,
+                    ]);
+                }
+
+                // Copiar riesgos del contrato
+                foreach ($contrato->riesgos as $riesgo) {
+                    $nuevoInforme->informeriesgos()->create([
+                        'tipo' => $riesgo->tipo,
+                        'descripcion' => $riesgo->descripcion,
+                        'tratamiento' => $riesgo->tratamiento,
+                        'responsable' => $riesgo->responsable,
+                        'periodicidad' => $riesgo->periodicidad,
+                    ]);
+                }
+
+                // Acumular: el siguiente informe faltante tendrá este saldo_viene + 0 (total_info del actual)
+                $saldoViene += 0; // total_info es 0, pero si en el futuro cambia, ya está listo
             }
 
             // Mover TODOS los pagos cerrados que estaban en un consecutivo menor o igual
@@ -685,6 +742,14 @@ new class extends Component
 
         DB::transaction(function () use ($informe) {
             $contrato = Contrato::findOrFail($informe->contrato_id);
+
+            // Retroceder TODOS los pagos que estaban en el consecutivo del informe
+            // eliminado o en consecutivos superiores, moviéndolos 1 posición atrás.
+            // Así quedan sincronizados con el cansecu_infor que se va a decrementar.
+            Pago::where('contrato_id', $informe->contrato_id)
+                ->where('cansecu_infor', '>=', $informe->cansecu_infor)
+                ->update(['cansecu_infor' => DB::raw('cansecu_infor - 1')]);
+
             $contrato->update(['cansecu_infor' => $contrato->cansecu_infor - 1]);
 
             $informe->informeobligaciones()->delete();
@@ -915,17 +980,17 @@ new class extends Component
                             <td class="px-4 py-3 text-sm text-gray-800 dark:text-gray-200">${{ number_format($informe->total_info, 2, ',', '.') }}</td>
                             <td class="px-4 py-3 text-sm text-gray-800 dark:text-gray-200">{{ $informe->porcentaje_cumplimiento }}%</td>
                             <td class="px-4 py-3 text-sm">
-                                @php $pagos = $this->getPagosInforme($informe->cansecu_infor); @endphp
-                                @if ($pagos->count() > 0)
-                                    @foreach ($pagos as $pago)
-                                        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium mr-1 mb-1
-                                            @if($pago->estado === 'abierto') bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400
-                                            @elseif($pago->estado === 'cerrado') bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400
-                                            @else bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400
-                                            @endif">
-                                            {{ $pago->numero }}
-                                        </span>
-                                    @endforeach
+                                @php
+                                    $pagosInforme = \App\Models\Pago::where('contrato_id', $informe->contrato_id)
+                                        ->where('cansecu_infor', $informe->cansecu_infor)
+                                        ->where('estado', 'cerrado')
+                                        ->get();
+                                @endphp
+                                @if ($pagosInforme->count() > 0)
+                                    <button wire:click="verPagosInforme({{ $informe->id }})" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400 dark:hover:bg-emerald-900/50 transition cursor-pointer">
+                                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                                        {{ $pagosInforme->count() }} pago(s)
+                                    </button>
                                 @else
                                     <span class="text-gray-400 dark:text-gray-500 text-xs">Sin pagos</span>
                                 @endif
@@ -1511,6 +1576,57 @@ new class extends Component
                     </button>
                     <button wire:click="delete" class="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition">
                         Eliminar
+                    </button>
+                </div>
+            </div>
+        </div>
+    @endif
+
+    <!-- Modal PAGOS DEL INFORME -->
+    @if ($modalPagosOpen)
+        <div class="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/60" wire:click="cerrarModalPagos" wire:key="pagos-modal">
+            <div class="w-full max-w-lg bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6 max-h-[80vh] overflow-y-auto" wire:click.stop>
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-bold text-gray-800 dark:text-gray-100">Pagos del Informe N° {{ $modalPagosInforme }}</h3>
+                    <button wire:click="cerrarModalPagos" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                    </button>
+                </div>
+                @if (count($modalPagosLista) > 0)
+                    <div class="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700">
+                        <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+                            <thead class="bg-gray-50 dark:bg-gray-700/50">
+                                <tr>
+                                    <th class="px-3 py-2 text-left text-xs font-semibold text-gray-500 dark:text-gray-400">#</th>
+                                    <th class="px-3 py-2 text-left text-xs font-semibold text-gray-500 dark:text-gray-400">N° Pago</th>
+                                    <th class="px-3 py-2 text-left text-xs font-semibold text-gray-500 dark:text-gray-400">Fecha</th>
+                                    <th class="px-3 py-2 text-right text-xs font-semibold text-gray-500 dark:text-gray-400">Valor Total</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-gray-100 dark:divide-gray-700/50">
+                                @foreach ($modalPagosLista as $pago)
+                                    <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/30">
+                                        <td class="px-3 py-2 text-sm text-gray-500 dark:text-gray-400">{{ $loop->iteration }}</td>
+                                        <td class="px-3 py-2 text-sm font-medium text-gray-800 dark:text-gray-200">{{ $pago['numero'] }}</td>
+                                        <td class="px-3 py-2 text-sm text-gray-600 dark:text-gray-400">{{ \Carbon\Carbon::parse($pago['fecha'])->format('d/m/Y') }}</td>
+                                        <td class="px-3 py-2 text-sm text-right font-semibold text-gray-800 dark:text-gray-200">${{ number_format($pago['valor_total'], 2, ',', '.') }}</td>
+                                    </tr>
+                                @endforeach
+                            </tbody>
+                            <tfoot>
+                                <tr class="bg-gray-50 dark:bg-gray-700/50">
+                                    <td colspan="3" class="px-3 py-2 text-sm font-bold text-right text-gray-800 dark:text-gray-200">Total:</td>
+                                    <td class="px-3 py-2 text-sm text-right font-bold text-emerald-600 dark:text-emerald-400">${{ number_format(collect($modalPagosLista)->sum('valor_total'), 2, ',', '.') }}</td>
+                                </tr>
+                            </tfoot>
+                        </table>
+                    </div>
+                @else
+                    <p class="text-sm text-gray-500 dark:text-gray-400 text-center py-4">No hay pagos cerrados para este informe.</p>
+                @endif
+                <div class="flex justify-end mt-4">
+                    <button wire:click="cerrarModalPagos" class="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-600 border border-gray-300 dark:border-gray-500 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-500 transition">
+                        Cerrar
                     </button>
                 </div>
             </div>

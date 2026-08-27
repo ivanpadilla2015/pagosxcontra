@@ -29,7 +29,7 @@
       <strong>Al</strong>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{{":".strtoupper($data->user->regional->director->name)}}<br/>
       &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{{$data->user->regional->director->cargo}}
       <br> <br>
-      <div align="justify" >{{"Con toda atención me permito enviar al señor ". $data->user->regional->director->nombre_director.", el informe de supervisión No.".$data->cansecu_infor."  Del contrato No."}} {{$data->contrato->numcontrato}}  Correspondiente {{$data->corresponde_periodo}}, de acuerdo con la siguiente información:</div>
+      <div align="justify" >{{"Con toda atención me permito enviar al señor ". $data->user->regional->director->nombre_director.", el informe de supervisión No.".$data->cansecu_infor."  Del contrato No."}} {{$data->contrato->numcontrato}}  Correspondiente {{$data->corresponde_texto_periodo}}, de acuerdo con la siguiente información:</div>
       <div align="justify" >{{"Tener en cuenta para el diligenciamiento del informe las instrucciones impartidas en el Manual de Contratación."}}</div>
       <table>
         <tr>
@@ -144,51 +144,33 @@
         </tr>
        
       </table>
-      <table>
+      <table style="table-layout: fixed; width: 100%;">
         <tr>
-            <td ></td>
-            <td ></td>
-            <td></td>
-            <td></td>
-            <td></td>
-            <td></td>
-            <td></td>
-            <td></td>
-            <td></td>
-            <td></td>
-            <td></td>
-            <td></td>
-            <td></td>
-            <td></td>
-            <td></td>
+            <td class="t2" style="background-color: #dedbda">NUMERAL</td>
+            <td class="tn" style="background-color: #dedbda">OBLIGACION</td>
+            <td class="t1" style="background-color: #dedbda">ENTREGABLE</td>
+            <td class="t2" style="background-color: #dedbda">ENE</td>
+            <td class="t2" style="background-color: #dedbda">FEB</td>
+            <td class="t2" style="background-color: #dedbda">MAR</td>
+            <td class="t2" style="background-color: #dedbda">ABR</td>
+            <td class="t2" style="background-color: #dedbda">MAY</td>
+            <td class="t2" style="background-color: #dedbda">JUN</td>
+            <td class="t2" style="background-color: #dedbda">JUL</td>
+            <td class="t2" style="background-color: #dedbda">AGO</td>
+            <td class="t2" style="background-color: #dedbda">SEP</td>
+            <td class="t2" style="background-color: #dedbda">OCT</td>
+            <td class="t2" style="background-color: #dedbda">NOV</td>
+            <td class="t2" style="background-color: #dedbda">DIC</td>
         </tr>
         <tr>
-            <td colspan="3" class="t1" align="center" style="background-color:  #dedbda ">DESCRIPCION</td>
-            <td colspan="12" class="t1" align="center" style="background-color:  #dedbda ">PLAZO EJECUCION</td>
-            
+            <td colspan="3" class="t1" align="center" style="background-color: #dedbda">DESCRIPCION</td>
+            <td colspan="12" class="t1" align="center" style="background-color: #dedbda">PLAZO EJECUCION</td>
          </tr>
-        <tr>
-            <td class="t2" style="background-color:  #dedbda ">NUMERAL</td>
-            <td class="tn" style="background-color:  #dedbda ">OBLIGACION</td>
-            <td class="t1" style="background-color:  #dedbda ">ENTREGABLE</td>
-            <td class="t2" style="background-color:  #dedbda ">ENE</td>
-            <td class="t2" style="background-color:  #dedbda ">FEB</td>
-            <td class="t2" style="background-color:  #dedbda ">MAR</td>
-            <td class="t2" style="background-color:  #dedbda ">ABR</td>
-            <td class="t2" style="background-color:  #dedbda ">MAY</td>
-            <td class="t2" style="background-color:  #dedbda ">JUN</td>
-            <td class="t2" style="background-color:  #dedbda ">JUL</td>
-            <td class="t2" style="background-color:  #dedbda ">AGO</td>
-            <td class="t2" style="background-color:  #dedbda ">SEP</td>
-            <td class="t2" style="background-color:  #dedbda ">OCT</td>
-            <td class="t2" style="background-color:  #dedbda ">NOV</td>
-            <td class="t2" style="background-color:  #dedbda ">DIC</td>
-        </tr>
         @foreach ($data->informeobligaciones as $item)
             <tr>
                 <td class="t2">{{ $item->numeral }}</td>
                 <td class="tn">{{ $item->obligacion_deta }}</td>
-                <td class="t1">{{ $item->entregable }}</td><!-- $action = (4 >= $data->contrato->num_mes  && 4 <= $data->mes_ejecucion) ? 'x' : '' -->
+                <td class="t1">{{ $item->entregable }}</td>
                 <td class="t2" align="center">{{ $action = (1 == $data->mes_ejecucion) ? $item->confirmar : '' }}</td>
                 <td class="t2" align="center">{{ $action = (2 == $data->mes_ejecucion) ? $item->confirmar : '' }}</td>
                 <td class="t2" align="center">{{ $action = (3 == $data->mes_ejecucion) ? $item->confirmar : '' }}</td>
@@ -196,8 +178,8 @@
                 <td class="t2" align="center">{{ $action = (5 == $data->mes_ejecucion) ? $item->confirmar : '' }}</td>
                 <td class="t2" align="center">{{ $action = (6 == $data->mes_ejecucion) ? $item->confirmar : '' }}</td>
                 <td class="t2" align="center">{{ $action = (7 == $data->mes_ejecucion) ? $item->confirmar : '' }}</td>
-                <td class="t2" align="center">{{ $action = (8 == $data->mes_ejecucion) ? $item->confirmar : '' }} </td>
-                <td class="t2" align="center">{{ $action = (9 == $data->mes_ejecucion) ? $item->confirmar : '' }} </td>
+                <td class="t2" align="center">{{ $action = (8 == $data->mes_ejecucion) ? $item->confirmar : '' }}</td>
+                <td class="t2" align="center">{{ $action = (9 == $data->mes_ejecucion) ? $item->confirmar : '' }}</td>
                 <td class="t2" align="center">{{ $action = (10 == $data->mes_ejecucion) ? $item->confirmar : '' }}</td>
                 <td class="t2" align="center">{{ $action = (11 == $data->mes_ejecucion) ? $item->confirmar : '' }}</td>
                 <td class="t2" align="center">{{ $action = (12 == $data->mes_ejecucion) ? $item->confirmar : '' }}</td>
@@ -277,7 +259,7 @@
                 $fe = new DateTime($fac->fechafac);  $fefa = $fe->format('d/m/Y');
               @endphp
             <tr>
-              <td colspan="2" class="colu" >{{'FACTURA: '.$fac->numfac}}</td>
+              <td colspan="2" class="colu" >{{'FACTURA: '. explode('-', $fac->numfac)[1]}}</td>
               <td  class="colu" >{{ $fefa }}</td>
               <td  class="colu" >{{ number_format($fac->valorfac, 2, ',', '.') }}</td>
               <td  class="colu" >{{ number_format($sdo, 2, ',', '.')}}</td>

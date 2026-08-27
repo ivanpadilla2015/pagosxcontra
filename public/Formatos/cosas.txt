@@ -1,0 +1,34 @@
+si cambias el dominio o link de acceso se realizan estos pasos
+************************************************************************
+- APP_URL: http://localhost → http://pagos.test
+- SANCTUM_STATEFUL_DOMAINS: agregado pagos.test,localhost,127.0.0.1
+- Caché: config, rutas y aplicación limpiados
+
+En el mismo archivo .env que acabamos de editar:
+D:\wamp64\www\pagosxcontra\.env
+En la línea 7 está ahora:
+SANCTUM_STATEFUL_DOMAINS=pagos.test,localhost,127.0.0.1
+Esa línea no existía antes — la agregué directamente al .env. Sanctum la lee automáticamente desde ahí (ver config/sanctum.php:18 donde hace env('SANCTUM_STATEFUL_DOMAINS', ...)).
+
+Asignación de Municipio a Productos (servicios)
+************************************************
+- Si lo haces por producto solo te mostrara el select para escoger el municipio solo si es tipo servicio dicho producto
+- Si lo hace con la plantilla de importación (plantilla_producto) se encuentra la columna "Municipio (opcional)" si no lo
+   colocas al momento de facturar te lo pedirá (Reteica Servicio)
+
+Para Reteica (Bien): si no creas el reteica para el bien asignados al proveedor (depende de la actividad del proveedor), entonces el reteica para la factura de ese proveedor será el reteica Globla (regional norte 5/1000 reteica Malambo)
+
+
+-Cada regional tiene su municio el cual se le aplica la retencion reteica
+
+-Comandos para limpiar caché:
+php artisan config:clear
+php artisan route:clear
+php artisan cache:clear
+
+WampServer 3.1 | Configuración de VirtualHost en una Intranet (Red Interna)
+******************************************************************************
+https://www.youtube.com/watch?v=Nf5tzXzELvM
+
+
+
