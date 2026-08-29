@@ -647,6 +647,14 @@ Grupo "Contratos" con sub-items: Obligación, Importar Obligaciones, Riesgos, Im
 - **Usuario admin en seeders**: `PermissionSeeder` crea roles+permisos, `UserSeeder` crea usuario admin con `->assignRole('admin')`, `DatabaseSeeder` ejecuta `PermissionSeeder` primero
 - **Sistema de Backups**: Spatie Laravel-Backup v10.3.1 con UI en `/admin/backups`. Backup manual (descargar fuente .zip, descargar BD .sql, crear backup completo BD+fuente), backup automático configurable (hora, habilitar/deshabilitar), tabla de backups existentes con descargar/eliminar, retención automática (7/30/12/12), `install-scheduler.bat` para Windows Task Scheduler
 - **Tabla `settings`**: store de configuraciones clave-valor (`backup_enabled`, `backup_time`, `backup_email`) con modelo `Setting` y seeder `SettingSeeder`
+- **Bug corregido: 405 Method Not Allowed en facturar**: el `<form wire:submit="buscarContrato">` no usaba `.prevent`, causando submission nativa POST a ruta GET-only. Corregido a `wire:submit.prevent`
+- **Bug corregido: fecha en PDF de informes**: templates `pdf_informe.blade.php` y `pdf_informe_comedores.blade.php` usaban `$data->fechainfo` (no existe), corregido a `$data->fecha`. Antes `new DateTime(null)` siempre mostraba fecha de hoy
+- **Diferenciación de rubros en facturar**: tabla de rubros muestra columna `#` con fondo amarillo y badge `DUP #N` para rubros duplicados (mismo rubro_id en múltiples movirubros)
+- **Saldo de rubro en selector de productos (facturar)**: dropdown de productos muestra saldo del rubro debajo del código en verde, para que el usuario sepa de cuál movirubro viene cada producto. Aplica en modo normal y ajuste
+- **Validación de saldo de rubros al grabar factura (facturar)**: `grabarFactura()` valida que el total `valor_con_iva` de las líneas agrupadas por itemcontrato no exceda el saldo disponible del movirubro. Considera facturas existentes (borrador + emitida) del mismo rubro. Excluye factura actual al editar
+- **Validación de saldo de rubros al crear/editar factura (facturacion)**: `crearFactura()` y `editarFactura()` incluyen la misma validación de saldo de rubros. En `editarFactura()` se excluye la factura actual del cálculo
+- **Columna Rubro en tablas de productos (facturacion)**: ambas tablas (modo Normal y modo Ajuste) muestran columna "Rubro" con código + nombre y saldo del movirubro en verde
+- **Eager loading corregido en facturacion**: `buscarContrato()` ahora carga `itemcontratos.movirubro` y `itemcontratos.rubro` para evitar N+1 queries
 - **Programación automática**: `app/Console/Kernel.php` lee `backup_enabled` y `backup_time` de BD, ejecuta `backup:run` diario si habilitado (try-catch por si tabla no existe)
 - **Configuración Windows**: `DB_DUMP_BINARY` en `.env` apunta a `D:/wamp64/bin/mysql/mysql8.4.7/bin`, `config/database.php` dump section con `skip_ssl => true`, `config/backup.php` con `relative_path => base_path()` para rutas relativas en zip, notificaciones mail deshabilitadas
 
@@ -768,3 +776,9 @@ Grupo "Contratos" con sub-items: Obligación, Importar Obligaciones, Riesgos, Im
 67. **PDF informes: campo corregido**: templates `pdf_informe.blade.php` y `pdf_informe_comedores.blade.php` usaban `$data->corresponde_periodo` (no existe), corregido a `$data->corresponde_texto_periodo`
 68. **Columna Pagos con modal**: la columna "Pagos" del listado de informes muestra un botón con conteo que abre un modal con tabla completa (N° Pago, Fecha, Valor Total). Antes mostraba badges inline que se desbordaban
 69. **Pagos por informe sin depender de búsqueda**: la columna de pagos usa `$informe->contrato_id` directamente para que funcione sin buscar el contrato en el filtro superior
+70. **`wire:submit.prevent`** en facturar: el formulario de búsqueda de contrato usa `wire:submit.prevent` para evitar submission nativa POST que causa 405 Method Not Allowed
+71. **Fecha en PDF de informes**: templates usan `$data->fecha` (columna real), NO `$data->fechainfo` (no existe). `new DateTime(null)` mostraba siempre fecha de hoy
+72. **Tabla de rubros con DUP**: se muestra columna `#` y badge `DUP #N` cuando hay múltiples movirubros con el mismo rubro_id, para diferenciarlos visualmente
+73. **Saldo visible en selector de productos**: cada producto muestra el saldo del movirubro al que pertenece, para que el usuario sepa de cuál rubro viene y evite exceder saldos
+74. **Validación de saldo al facturar**: antes de grabar/emitir factura, se valida que el total `valor_con_iva` por movirubro no exceda el saldo disponible. Considera facturas existentes (borrador + emitida) del mismo rubro. Evita llegar al pago con conflicto de saldo
+75. **DUP solo en tabla de rubros, no en productos**: el badge DUP se muestra en la tabla de rubros (facturar) para identificar filas duplicadas. En las tablas de productos NO se muestra DUP — el saldo es suficiente para diferenciar

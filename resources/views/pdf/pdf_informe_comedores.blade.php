@@ -15,7 +15,7 @@
  		  <div>
   			<img src="{{ public_path('img/CT-FO-11.JPG')}}" width="100%"  alt="Responsive image ">
       </div>
-      @php  $fein = $data->fechainfo;
+      @php  $fein = $data->fecha;
             $fechin = new DateTime($fein);
             $fecha_d_m_y = $fechin->format('d-m-Y'); @endphp 
       <table>

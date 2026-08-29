@@ -43,6 +43,11 @@ new class extends Component
     public float $ivaLinea = 0;
     public float $totalLinea = 0;
 
+    // Modo ajuste
+    public bool $esAjuste = false;
+    public float $valorAjuste = 0;
+    public float $porcentajeIvaAjuste = 19;
+
     // Guardado y edición
     public bool $guardando = false;
     public ?int $factura_id = null;
@@ -113,6 +118,9 @@ new class extends Component
         $this->cantidad = 1;
         $this->municipio_linea = null;
         $this->estampilla_linea_id = '';
+        $this->esAjuste = false;
+        $this->valorAjuste = 0;
+        $this->porcentajeIvaAjuste = 19;
 
         if (empty(trim($this->numcontrato))) {
             $this->contratoError = 'Ingrese un número de contrato.';
@@ -250,6 +258,86 @@ new class extends Component
         $this->dispatch('reset-producto-selector');
     }
 
+    // ------------------------------------------------------------------
+    // Agregar línea de ajuste
+    // ------------------------------------------------------------------
+
+    public function agregarLineaAjuste(): void
+    {
+        if (!$this->producto_id || !$this->contrato) {
+            session()->flash('error', 'Seleccione un producto válido para el ajuste.');
+            return;
+        }
+
+        if ($this->valorAjuste <= 0) {
+            session()->flash('error', 'El valor del ajuste debe ser mayor a cero.');
+            return;
+        }
+
+        if ($this->porcentajeIvaAjuste < 0 || $this->porcentajeIvaAjuste > 100) {
+            session()->flash('error', 'El porcentaje de IVA debe estar entre 0 y 100.');
+            return;
+        }
+
+        $item = $this->contrato->itemcontratos->firstWhere('producto_id', $this->producto_id);
+        if (!$item) {
+            session()->flash('error', 'Producto no encontrado en el contrato.');
+            return;
+        }
+
+        $tipo = $item->producto->tipo ?? 'bien';
+
+        if ($tipo === 'servicio' && empty($this->municipio_linea)) {
+            session()->flash('error', 'Los servicios deben tener un municipio seleccionado para Reteica.');
+            return;
+        }
+
+        // Calcular base e IVA desde el valor total (con IVA)
+        $divisor = 100 + $this->porcentajeIvaAjuste;
+        $valorIva = round($this->valorAjuste * ($this->porcentajeIvaAjuste / $divisor), 2);
+        $valorBase = round($this->valorAjuste - $valorIva, 2);
+
+        $this->lineas[] = [
+            'itemcontrato_id'         => $item->id,
+            'producto_nombre'         => $item->producto->name ?? '—',
+            'tipo_adquisicion'        => $tipo,
+            'valor_costo_unit'        => $valorBase,
+            'iva_unit'                => $this->porcentajeIvaAjuste,
+            'valor_iva_unit'          => $valorIva,
+            'valor_con_iva_unit'      => $this->valorAjuste,
+            'unidad'                  => $item->unidad,
+            'rubro'                   => $item->rubro->nombre_rubro ?? '—',
+            'uso'                     => $item->producto->uso->nombre_uso ?? '—',
+            'cantidad'                => 1,
+            'municipio_id'            => $this->municipio_linea,
+            'municipio_nombre'        => $this->obtenerNombreMunicipio($this->municipio_linea),
+            'estampilla_retencion_id' => !empty($this->estampilla_linea_id) ? (int) $this->estampilla_linea_id : null,
+            'estampilla_nombre'       => $this->obtenerNombreEstampilla($this->estampilla_linea_id),
+            'valor_base'              => $valorBase,
+            'valor_iva'               => $valorIva,
+            'valor_con_iva'           => $this->valorAjuste,
+            'es_ajuste'               => true,
+            'porcentaje_iva'          => $this->porcentajeIvaAjuste,
+        ];
+
+        $idx = count($this->lineas) - 1;
+        $this->calcularRetencionesLinea($idx);
+
+        // Reset selección
+        $this->producto_id = null;
+        $this->cantidad = 1;
+        $this->municipio_linea = $this->municipio_default_id;
+        $this->estampilla_linea_id = $this->estampilla_default_id;
+        $this->productoSeleccionado = null;
+        $this->subtotalLinea = 0;
+        $this->ivaLinea = 0;
+        $this->totalLinea = 0;
+        $this->valorAjuste = 0;
+        $this->porcentajeIvaAjuste = 19;
+
+        $this->dispatch('reset-producto-selector');
+    }
+
     public function eliminarLinea(int $indice): void
     {
         if (!isset($this->lineas[$indice])) return;
@@ -283,10 +371,15 @@ new class extends Component
 
         $linea = $this->lineas[$idx];
 
+        // Para ajustes: usar producto_id directamente (no hay itemcontrato real)
+        $productoId = $linea['es_ajuste'] ?? false
+            ? ($this->contrato->itemcontratos->firstWhere('producto_id', $linea['itemcontrato_id'] ?? null)?->producto_id ?? $linea['itemcontrato_id'] ?? null)
+            : Itemcontrato::find($linea['itemcontrato_id'])?->producto_id;
+
         $facturaLinea = new FacturaLinea([
             'factura_id'              => 0,
-            'itemcontrato_id'         => $linea['itemcontrato_id'],
-            'producto_id'             => Itemcontrato::find($linea['itemcontrato_id'])?->producto_id,
+            'itemcontrato_id'         => $linea['itemcontrato_id'] ?? null,
+            'producto_id'             => $productoId,
             'tipo_adquisicion'        => $linea['tipo_adquisicion'] ?? 'bien',
             'municipio_id'            => $linea['municipio_id'] ?? null,
             'estampilla_retencion_id' => $linea['estampilla_retencion_id'] ?? null,
@@ -400,6 +493,42 @@ new class extends Component
             }
         }
 
+        // Validar saldo de rubros: sumar valor_con_iva de las líneas agrupadas por itemcontrato
+        $porItemcontrato = [];
+        foreach ($this->lineas as $linea) {
+            $itemcontratoId = $linea['itemcontrato_id'];
+            $porItemcontrato[$itemcontratoId] = ($porItemcontrato[$itemcontratoId] ?? 0) + ($linea['valor_con_iva'] ?? 0);
+        }
+
+        foreach ($porItemcontrato as $itemcontratoId => $totalLineas) {
+            $itemcontrato = Itemcontrato::with('movirubro')->find($itemcontratoId);
+            if (!$itemcontrato || !$itemcontrato->movirubro) continue;
+
+            $movirubro = $itemcontrato->movirubro;
+            $saldoDisponible = (float) $movirubro->saldo_rubro;
+
+            // Descontar facturas existentes (borrador + emitida) que usen este mismo movirubro, excluyendo la factura actual si se está editando
+            $facturasExistentes = \App\Models\FacturaLinea::whereHas('factura', function ($q) use ($movirubro) {
+                $q->where('contrato_id', $this->contrato->id)
+                  ->whereIn('estado', ['borrador', 'emitida']);
+                if ($this->factura_id) {
+                    $q->where('id', '!=', $this->factura_id);
+                }
+            })->whereHas('itemcontrato', function ($q) use ($movirubro) {
+                $q->where('movirubro_id', $movirubro->id);
+            })->sum('valor_con_iva');
+
+            $saldoRestante = $saldoDisponible - $facturasExistentes;
+
+            if ($totalLineas > $saldoRestante + 0.01) {
+                $nombreRubro = $movirubro->rubro->nombre_rubro ?? 'Sin nombre';
+                $codigoRubro = $movirubro->rubro->codigo_rubro ?? '';
+                $this->dispatch('alerta', tipo: 'error', mensaje: 'El rubro "' . $codigoRubro . ' - ' . $nombreRubro . '" no tiene saldo suficiente. Saldo disponible: $' . number_format($saldoRestante, 2, ',', '.') . ', total de la factura para este rubro: $' . number_format($totalLineas, 2, ',', '.'));
+                $this->guardando = false;
+                return;
+            }
+        }
+
         $servicio = new CalculadoraRetenciones();
         $year = date('Y', strtotime($this->fecha_factura));
 
@@ -431,6 +560,8 @@ new class extends Component
             $factura->update([
                 'numero'        => $numeroInterno,
                 'fecha'         => $this->fecha_factura,
+                'numero_migo'   => $this->numero_migo ?: null,
+                'fecha_migo'    => $this->fecha_migo ?: null,
                 'municipio_id'  => $this->municipio_default_id,
                 'dependencia_id' => $this->dependencia_id,
             ]);
@@ -467,8 +598,27 @@ new class extends Component
             if (!$itemcontrato) continue;
 
             $cantidad = max(1, (float) ($linea['cantidad'] ?? 1));
+            $esAjuste = $linea['es_ajuste'] ?? false;
 
-    $facturaLinea = FacturaLinea::create([
+            if ($esAjuste) {
+                // Línea de ajuste: usar valores personalizados
+                $facturaLinea = FacturaLinea::create([
+                    'factura_id'              => $factura->id,
+                    'itemcontrato_id'         => $itemcontrato->id,
+                    'producto_id'             => $itemcontrato->producto_id,
+                    'tipo_adquisicion'        => $linea['tipo_adquisicion'] ?? 'bien',
+                    'municipio_id'            => $linea['municipio_id'] ?? null,
+                    'estampilla_retencion_id' => !empty($linea['estampilla_retencion_id']) ? (int) $linea['estampilla_retencion_id'] : null,
+                    'valor_base'              => $linea['valor_base'],
+                    'valor_iva'               => $linea['valor_iva'],
+                    'valor_con_iva'           => $linea['valor_con_iva'],
+                    'cantidad'                => 1,
+                    'es_ajuste'               => true,
+                    'porcentaje_iva'          => $linea['porcentaje_iva'] ?? null,
+                ]);
+            } else {
+                // Línea normal: valores del itemcontrato
+        $facturaLinea = FacturaLinea::create([
         'factura_id'              => $factura->id,
         'itemcontrato_id'         => $itemcontrato->id,
         'producto_id'             => $itemcontrato->producto_id,
@@ -480,6 +630,7 @@ new class extends Component
         'valor_con_iva'           => $itemcontrato->valor_con_iva * $cantidad,
         'cantidad'                => $cantidad,
     ]);
+            }
 
             $resultado = $servicio->calcularYPersistir($facturaLinea);
             $this->retencionesPorLinea[$idx] = $resultado['calculadas'];
@@ -549,27 +700,55 @@ new class extends Component
 
         foreach ($factura->lineas as $idx => $fl) {
             $item = $fl->itemcontrato;
+            $esAjuste = $fl->es_ajuste ?? false;
 
-            $this->lineas[] = [
-                'itemcontrato_id'         => $fl->itemcontrato_id,
-                'producto_nombre'         => $item->producto->name ?? '—',
-                'tipo_adquisicion'        => $fl->tipo_adquisicion ?? 'bien',
-                'valor_costo_unit'        => $item->valor_costo,
-                'iva_unit'                => $item->iva,
-                'valor_iva_unit'          => $item->valor_iva,
-                'valor_con_iva_unit'      => $item->valor_con_iva,
-                'unidad'                  => $item->unidad,
-                'rubro'                   => $item->rubro->nombre_rubro ?? '—',
-                'uso'                     => $item->producto->uso->nombre_uso ?? '—',
-                'cantidad'                => $fl->cantidad,
-                'municipio_id'            => $fl->municipio_id,
-                'municipio_nombre'        => $this->obtenerNombreMunicipio($fl->municipio_id),
-                'estampilla_retencion_id' => $fl->estampilla_retencion_id,
-                'estampilla_nombre'       => $this->obtenerNombreEstampilla($fl->estampilla_retencion_id),
-                'valor_base'              => $fl->valor_base,
-                'valor_iva'               => $fl->valor_iva,
-                'valor_con_iva'           => $fl->valor_con_iva,
-            ];
+            if ($esAjuste) {
+                // Línea de ajuste: usar valores guardados (no del itemcontrato)
+                $this->lineas[] = [
+                    'itemcontrato_id'         => $fl->itemcontrato_id,
+                    'producto_nombre'         => $item->producto->name ?? '—',
+                    'tipo_adquisicion'        => $fl->tipo_adquisicion ?? 'bien',
+                    'valor_costo_unit'        => $fl->valor_base,
+                    'iva_unit'                => $fl->porcentaje_iva ?? 0,
+                    'valor_iva_unit'          => $fl->valor_iva,
+                    'valor_con_iva_unit'      => $fl->valor_con_iva,
+                    'unidad'                  => $item->unidad,
+                    'rubro'                   => $item->rubro->nombre_rubro ?? '—',
+                    'uso'                     => $item->producto->uso->nombre_uso ?? '—',
+                    'cantidad'                => $fl->cantidad,
+                    'municipio_id'            => $fl->municipio_id,
+                    'municipio_nombre'        => $this->obtenerNombreMunicipio($fl->municipio_id),
+                    'estampilla_retencion_id' => $fl->estampilla_retencion_id,
+                    'estampilla_nombre'       => $this->obtenerNombreEstampilla($fl->estampilla_retencion_id),
+                    'valor_base'              => $fl->valor_base,
+                    'valor_iva'               => $fl->valor_iva,
+                    'valor_con_iva'           => $fl->valor_con_iva,
+                    'es_ajuste'               => true,
+                    'porcentaje_iva'          => $fl->porcentaje_iva,
+                ];
+            } else {
+                // Línea normal: valores del itemcontrato
+                $this->lineas[] = [
+                    'itemcontrato_id'         => $fl->itemcontrato_id,
+                    'producto_nombre'         => $item->producto->name ?? '—',
+                    'tipo_adquisicion'        => $fl->tipo_adquisicion ?? 'bien',
+                    'valor_costo_unit'        => $item->valor_costo,
+                    'iva_unit'                => $item->iva,
+                    'valor_iva_unit'          => $item->valor_iva,
+                    'valor_con_iva_unit'      => $item->valor_con_iva,
+                    'unidad'                  => $item->unidad,
+                    'rubro'                   => $item->rubro->nombre_rubro ?? '—',
+                    'uso'                     => $item->producto->uso->nombre_uso ?? '—',
+                    'cantidad'                => $fl->cantidad,
+                    'municipio_id'            => $fl->municipio_id,
+                    'municipio_nombre'        => $this->obtenerNombreMunicipio($fl->municipio_id),
+                    'estampilla_retencion_id' => $fl->estampilla_retencion_id,
+                    'estampilla_nombre'       => $this->obtenerNombreEstampilla($fl->estampilla_retencion_id),
+                    'valor_base'              => $fl->valor_base,
+                    'valor_iva'               => $fl->valor_iva,
+                    'valor_con_iva'           => $fl->valor_con_iva,
+                ];
+            }
 
             // Cargar retenciones guardadas
             $this->retencionesPorLinea[$idx] = $fl->retenciones->map(fn($r) => [
@@ -590,7 +769,7 @@ new class extends Component
 
     public function nuevaFactura(): void
     {
-        $this->reset(['factura_id', 'numero_factura', 'fecha_factura', 'numero_migo', 'fecha_migo', 'municipio_default_id', 'estampilla_default_id', 'dependencia_id', 'lineas', 'retencionesPorLinea', 'pendientesPorLinea', 'estadoFactura']);
+        $this->reset(['factura_id', 'numero_factura', 'fecha_factura', 'numero_migo', 'fecha_migo', 'municipio_default_id', 'estampilla_default_id', 'dependencia_id', 'lineas', 'retencionesPorLinea', 'pendientesPorLinea', 'estadoFactura', 'esAjuste', 'valorAjuste', 'porcentajeIvaAjuste']);
         $this->estadoFactura = 'borrador';
 
         if ($this->contrato) {
@@ -661,7 +840,7 @@ new class extends Component
         <div class="flex justify-center">
             <div class="w-full max-w-md bg-white dark:bg-gray-800 shadow-md rounded-lg p-8">
                 <h2 class="text-lg font-semibold text-gray-700 dark:text-gray-200 mb-6 text-center">Buscar Contrato</h2>
-                <form wire:submit="buscarContrato">
+                <form wire:submit.prevent="buscarContrato">
                     <div class="mb-4">
                         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Número de Contrato</label>
                         <input type="text" wire:model="numcontrato" class="form-input w-full" placeholder="Ej: 010-010-2026" autofocus />
@@ -716,6 +895,7 @@ new class extends Component
                     <table class="w-full text-sm">
                         <thead>
                             <tr class="border-b border-gray-200 dark:border-gray-700">
+                                <th class="text-center px-3 py-3 font-medium text-gray-500 dark:text-gray-400 w-10">#</th>
                                 <th class="text-left px-6 py-3 font-medium text-gray-500 dark:text-gray-400">Código</th>
                                 <th class="text-left px-6 py-3 font-medium text-gray-500 dark:text-gray-400">Nombre</th>
                                 <th class="text-right px-6 py-3 font-medium text-gray-500 dark:text-gray-400">Valor</th>
@@ -723,16 +903,25 @@ new class extends Component
                             </tr>
                         </thead>
                         <tbody>
-                            @forelse ($contrato->movirubros as $movirubro)
-                                <tr class="border-b border-gray-100 dark:border-gray-700/50 hover:bg-gray-50 dark:hover:bg-gray-700/30">
+                            @forelse ($contrato->movirubros as $idx => $movirubro)
+                                @php
+                                    $duplicados = $contrato->movirubros->filter(fn($m) => $m->rubro_id === $movirubro->rubro_id)->count();
+                                @endphp
+                                <tr class="border-b border-gray-100 dark:border-gray-700/50 hover:bg-gray-50 dark:hover:bg-gray-700/30 {{ $duplicados > 1 ? 'bg-amber-50/50 dark:bg-amber-900/10' : '' }}">
+                                    <td class="px-3 py-3 text-center font-semibold {{ $duplicados > 1 ? 'text-amber-600 dark:text-amber-400' : 'text-gray-400 dark:text-gray-500' }}">{{ $idx + 1 }}</td>
                                     <td class="px-6 py-3 text-gray-800 dark:text-gray-100">{{ $movirubro->rubro->codigo_rubro ?? '—' }}</td>
-                                    <td class="px-6 py-3 text-gray-800 dark:text-gray-100">{{ $movirubro->rubro->nombre_rubro ?? '—' }}</td>
+                                    <td class="px-6 py-3 text-gray-800 dark:text-gray-100">
+                                        {{ $movirubro->rubro->nombre_rubro ?? '—' }}
+                                        @if ($duplicados > 1)
+                                            <span class="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">DUP #{{ $idx + 1 }}</span>
+                                        @endif
+                                    </td>
                                     <td class="px-6 py-3 text-right text-gray-800 dark:text-gray-100">$ {{ number_format($movirubro->valor_rubro, 2, ',', '.') }}</td>
                                     <td class="px-6 py-3 text-right font-medium text-emerald-600 dark:text-emerald-400">$ {{ number_format($movirubro->saldo_rubro, 2, ',', '.') }}</td>
                                 </tr>
                             @empty
                                 <tr>
-                                    <td colspan="4" class="px-6 py-6 text-center text-gray-500 dark:text-gray-400">No hay rubros registrados.</td>
+                                    <td colspan="5" class="px-6 py-6 text-center text-gray-500 dark:text-gray-400">No hay rubros registrados.</td>
                                 </tr>
                             @endforelse
                         </tbody>
@@ -795,71 +984,189 @@ new class extends Component
 
             {{-- Selección de producto (con selects por línea) --}}
             <div class="bg-white dark:bg-gray-800 shadow-md rounded-lg p-6 mb-6">
-                <h3 class="text-lg font-semibold text-gray-700 dark:text-gray-200 mb-4">Agregar Producto</h3>
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-semibold text-gray-700 dark:text-gray-200">
+                        {{ $esAjuste ? 'Agregar Ajuste' : 'Agregar Producto' }}
+                    </h3>
+                    <button type="button" wire:click="$set('esAjuste', {{ $esAjuste ? 'false' : 'true' }})"
+                            class="px-3 py-1.5 text-xs font-medium rounded-lg transition
+                            {{ $esAjuste
+                                ? 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400'
+                                : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300' }}">
+                        {{ $esAjuste ? 'Modo Ajuste ACTIVO' : 'Modo Ajuste' }}
+                    </button>
+                </div>
 
-                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-4 items-end">
-                    <div class="lg:col-span-2">
-                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Producto</label>
-                        @php
-                            $productosJson = $contrato->itemcontratos->map(fn($it) => ['id' => $it->producto_id, 'name' => $it->producto->name ?? '—', 'valor' => $it->valor_con_iva])->values()->toArray();
-                        @endphp
-                        <div x-data="{ open: false, search: '', selectedId: @js($producto_id), selectedName: @js($producto_id ? ($contrato->itemcontratos->firstWhere('producto_id', $producto_id)?->producto->name ?? '') : ''), allProducts: @js($productosJson) }"
-                             wire:ignore
-                             @reset-producto-selector.window="selectedId = null; selectedName = ''; search = ''"
-                             @click.outside="open = false" class="relative">
-                            <button type="button" @click="open = !open; search = ''" class="form-input w-full cursor-pointer flex items-center justify-between min-h-[38px]">
-                                <span x-text="selectedName || 'Seleccione...'" :class="selectedId ? 'text-gray-800 dark:text-gray-100' : 'text-gray-400 dark:text-gray-500'"></span>
-                                <svg class="w-4 h-4 text-gray-400 shrink-0 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
-                            </button>
-                            <div x-show="open" x-cloak x-transition class="absolute z-50 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg max-h-60 overflow-y-auto">
-                                <div class="p-2 sticky top-0 bg-white dark:bg-gray-800 z-10">
-                                    <input type="text" x-model="search" @click.stop placeholder="Escriba para buscar..." class="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-700 text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-violet-400" />
-                                </div>
-                                <template x-for="(p, idx) in (search ? allProducts.filter(x => x.name.toLowerCase().includes(search.toLowerCase())) : allProducts)" :key="idx">
-                                    <div @click.stop="selectedId = p.id; selectedName = p.name; open = false; search = ''; $wire.set('producto_id', p.id); $wire.calcularDetalleProducto()" class="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-violet-50 dark:hover:bg-violet-900/20 cursor-pointer flex items-center justify-between">
-                                        <span x-text="p.name"></span>
-                                        <span class="text-xs text-gray-400" x-text="'$' + Number(p.valor).toLocaleString('es-CO', {minimumFractionDigits: 2, maximumFractionDigits: 2})"></span>
+                @if ($esAjuste)
+                    {{-- Modo Ajuste --}}
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-4 items-end">
+                        <div class="lg:col-span-2">
+                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Producto (para retenciones) *</label>
+                            @php
+                                $productosJson = $contrato->itemcontratos->map(fn($it) => ['id' => $it->producto_id, 'name' => $it->producto->name ?? '—', 'rubro' => $it->rubro->codigo_rubro ?? '—', 'valor' => $it->valor_con_iva, 'saldo' => $it->movirubro?->saldo_rubro ?? 0])->values()->toArray();
+                            @endphp
+                            <div x-data="{ open: false, search: '', selectedId: @js($producto_id), selectedName: @js($producto_id ? ($contrato->itemcontratos->firstWhere('producto_id', $producto_id)?->producto->name ?? '') : ''), allProducts: @js($productosJson) }"
+                                 wire:ignore
+                                 @reset-producto-selector.window="selectedId = null; selectedName = ''; search = ''"
+                                 @click.outside="open = false" class="relative">
+                                <button type="button" @click="open = !open; search = ''" class="form-input w-full cursor-pointer flex items-center justify-between min-h-[38px]">
+                                    <span x-text="selectedName || 'Seleccione producto...'" :class="selectedId ? 'text-gray-800 dark:text-gray-100' : 'text-gray-400 dark:text-gray-500'"></span>
+                                    <svg class="w-4 h-4 text-gray-400 shrink-0 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                                </button>
+                                <div x-show="open" x-cloak x-transition class="absolute z-50 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg max-h-60 overflow-y-auto">
+                                    <div class="p-2 sticky top-0 bg-white dark:bg-gray-800 z-10">
+                                        <input type="text" x-model="search" @click.stop placeholder="Escriba para buscar..." class="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-700 text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-violet-400" />
                                     </div>
-                                </template>
+                                    <template x-for="(p, idx) in (search ? allProducts.filter(x => x.name.toLowerCase().includes(search.toLowerCase()) || x.rubro.toLowerCase().includes(search.toLowerCase())) : allProducts)" :key="idx">
+                                        <div @click.stop="selectedId = p.id; selectedName = p.name; open = false; search = ''; $wire.set('producto_id', p.id); $wire.calcularDetalleProducto()" class="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-violet-50 dark:hover:bg-violet-900/20 cursor-pointer flex items-center justify-between">
+                                            <div>
+                                                <span class="text-gray-800 dark:text-gray-100" x-text="p.name"></span>
+                                                <span class="block text-xs text-purple-500 dark:text-purple-400" x-text="p.rubro"></span>
+                                            </div>
+                                            <div class="text-right ml-2">
+                                                <span class="block text-xs text-gray-400 whitespace-nowrap" x-text="'$' + Number(p.valor).toLocaleString('es-CO', {minimumFractionDigits: 2, maximumFractionDigits: 2})"></span>
+                                                <span class="block text-[10px] text-emerald-500 dark:text-emerald-400 whitespace-nowrap" x-text="'Saldo: $' + Number(p.saldo).toLocaleString('es-CO', {minimumFractionDigits: 2, maximumFractionDigits: 2})"></span>
+                                            </div>
+                                        </div>
+                                    </template>
+                                </div>
                             </div>
                         </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Valor Total (con IVA) *</label>
+                            <input type="number" wire:model="valorAjuste" min="0" step="0.01" class="form-input w-full" placeholder="Ej: 50000" />
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">% IVA</label>
+                            <input type="number" wire:model="porcentajeIvaAjuste" min="0" max="100" step="0.01" class="form-input w-full" />
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                Municipio
+                                @if ($this->productoSeleccionado && ($this->productoSeleccionado['tipo'] ?? '') === 'servicio')
+                                    <span class="text-amber-500 font-semibold">*</span>
+                                @endif
+                            </label>
+                            <select wire:model.live="municipio_linea" class="form-select w-full">
+                                <option value="">Seleccionar...</option>
+                                @foreach ($this->municipios as $m)
+                                    <option value="{{ $m->id }}">{{ $m->nombre }}</option>
+                                @endforeach
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Estampilla</label>
+                            <select wire:model="estampilla_linea_id" class="form-select w-full">
+                                <option value="">Ninguna</option>
+                                @foreach ($this->estampillas as $e)
+                                    <option value="{{ $e->id }}">{{ $e->name }}</option>
+                                @endforeach
+                            </select>
+                        </div>
+                        <div class="sm:col-span-2 flex gap-2">
+                            <button type="button" wire:click="agregarLineaAjuste" class="flex-1 bg-amber-600 hover:bg-amber-700 text-white font-medium py-2 px-6 rounded-lg transition">
+                                + Agregar Ajuste
+                            </button>
+                        </div>
                     </div>
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Cantidad</label>
-                        <input type="number" wire:model="cantidad" wire:change="calcularDetalleProducto" min="1" class="form-input w-full" />
-                    </div>
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                            Municipio
-                            @if ($this->productoSeleccionado && ($this->productoSeleccionado['tipo'] ?? '') === 'servicio')
-                                <span class="text-amber-500 font-semibold">*</span>
+
+                    @if ($valorAjuste > 0)
+                        @php
+                            $divisorIva = 100 + $porcentajeIvaAjuste;
+                            $ivaPreview = round($valorAjuste * ($porcentajeIvaAjuste / $divisorIva), 2);
+                            $basePreview = round($valorAjuste - $ivaPreview, 2);
+                        @endphp
+                        <div class="mt-4 p-4 bg-amber-50 dark:bg-amber-900/20 rounded-lg border border-amber-200 dark:border-amber-700">
+                            <p class="text-sm font-medium text-amber-600 dark:text-amber-400 mb-2">Detalle del ajuste:</p>
+                            <div class="grid grid-cols-3 gap-3 text-sm">
+                                <div class="rounded-lg bg-white dark:bg-gray-800 px-3 py-2">
+                                    <span class="text-xs text-gray-500">Subtotal (base)</span>
+                                    <p class="font-semibold text-gray-800 dark:text-gray-100">$ {{ number_format($basePreview, 2, ',', '.') }}</p>
+                                </div>
+                                <div class="rounded-lg bg-white dark:bg-gray-800 px-3 py-2">
+                                    <span class="text-xs text-gray-500">IVA ({{ $porcentajeIvaAjuste }}%)</span>
+                                    <p class="font-semibold text-gray-800 dark:text-gray-100">$ {{ number_format($ivaPreview, 2, ',', '.') }}</p>
+                                </div>
+                                <div class="rounded-lg bg-white dark:bg-gray-800 px-3 py-2">
+                                    <span class="text-xs text-gray-500">Total Ajuste</span>
+                                    <p class="font-bold text-amber-700 dark:text-amber-400">$ {{ number_format($valorAjuste, 2, ',', '.') }}</p>
+                                </div>
+                            </div>
+                        </div>
+                    @endif
+
+                @else
+                    {{-- Modo Producto Normal --}}
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-4 items-end">
+                        <div class="lg:col-span-2">
+                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Producto</label>
+                            @php
+                                $productosJson = $contrato->itemcontratos->map(fn($it) => ['id' => $it->producto_id, 'name' => $it->producto->name ?? '—', 'rubro' => $it->rubro->codigo_rubro ?? '—', 'valor' => $it->valor_con_iva, 'saldo' => $it->movirubro?->saldo_rubro ?? 0, 'movirubro_id' => $it->movirubro_id])->values()->toArray();
+                            @endphp
+                            <div x-data="{ open: false, search: '', selectedId: @js($producto_id), selectedName: @js($producto_id ? ($contrato->itemcontratos->firstWhere('producto_id', $producto_id)?->producto->name ?? '') : ''), allProducts: @js($productosJson) }"
+                                 wire:ignore
+                                 @reset-producto-selector.window="selectedId = null; selectedName = ''; search = ''"
+                                 @click.outside="open = false" class="relative">
+                                <button type="button" @click="open = !open; search = ''" class="form-input w-full cursor-pointer flex items-center justify-between min-h-[38px]">
+                                    <span x-text="selectedName || 'Seleccione producto...'" :class="selectedId ? 'text-gray-800 dark:text-gray-100' : 'text-gray-400 dark:text-gray-500'"></span>
+                                    <svg class="w-4 h-4 text-gray-400 shrink-0 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                                </button>
+                                <div x-show="open" x-cloak x-transition class="absolute z-50 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg max-h-60 overflow-y-auto">
+                                    <div class="p-2 sticky top-0 bg-white dark:bg-gray-800 z-10">
+                                        <input type="text" x-model="search" @click.stop placeholder="Escriba para buscar..." class="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-700 text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-violet-400" />
+                                    </div>
+                                    <template x-for="(p, idx) in (search ? allProducts.filter(x => x.name.toLowerCase().includes(search.toLowerCase()) || x.rubro.toLowerCase().includes(search.toLowerCase())) : allProducts)" :key="idx">
+                                        <div @click.stop="selectedId = p.id; selectedName = p.name; open = false; search = ''; $wire.set('producto_id', p.id); $wire.calcularDetalleProducto()" class="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-violet-50 dark:hover:bg-violet-900/20 cursor-pointer flex items-center justify-between">
+                                            <div>
+                                                <span class="text-gray-800 dark:text-gray-100" x-text="p.name"></span>
+                                                <span class="block text-xs text-purple-500 dark:text-purple-400" x-text="p.rubro"></span>
+                                            </div>
+                                            <div class="text-right ml-2">
+                                                <span class="block text-xs text-gray-400 whitespace-nowrap" x-text="'$' + Number(p.valor).toLocaleString('es-CO', {minimumFractionDigits: 2, maximumFractionDigits: 2})"></span>
+                                                <span class="block text-[10px] text-emerald-500 dark:text-emerald-400 whitespace-nowrap" x-text="'Saldo: $' + Number(p.saldo).toLocaleString('es-CO', {minimumFractionDigits: 2, maximumFractionDigits: 2})"></span>
+                                            </div>
+                                        </div>
+                                    </template>
+                                </div>
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Cantidad</label>
+                            <input type="number" wire:model="cantidad" wire:change="calcularDetalleProducto" min="1" class="form-input w-full" />
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                Municipio
+                                @if ($this->productoSeleccionado && ($this->productoSeleccionado['tipo'] ?? '') === 'servicio')
+                                    <span class="text-amber-500 font-semibold">*</span>
+                                @endif
+                            </label>
+                            <select wire:model.live="municipio_linea" class="form-select w-full">
+                                <option value="">Seleccionar...</option>
+                                @foreach ($this->municipios as $m)
+                                    <option value="{{ $m->id }}">{{ $m->nombre }}</option>
+                                @endforeach
+                            </select>
+                            @if ($this->productoSeleccionado && ($this->productoSeleccionado['tipo'] ?? '') === 'servicio' && !$this->reteicaConfigurado)
+                                <p class="mt-0.5 text-xs text-amber-600 dark:text-amber-400">Requerido para Reteica</p>
                             @endif
-                        </label>
-                        <select wire:model.live="municipio_linea" class="form-select w-full">
-                            <option value="">Seleccionar...</option>
-                            @foreach ($this->municipios as $m)
-                                <option value="{{ $m->id }}">{{ $m->nombre }}</option>
-                            @endforeach
-                        </select>
-                        @if ($this->productoSeleccionado && ($this->productoSeleccionado['tipo'] ?? '') === 'servicio' && !$this->reteicaConfigurado)
-                            <p class="mt-0.5 text-xs text-amber-600 dark:text-amber-400">Requerido para Reteica</p>
-                        @endif
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Estampilla</label>
+                            <select wire:model="estampilla_linea_id" class="form-select w-full">
+                                <option value="">Ninguna</option>
+                                @foreach ($this->estampillas as $e)
+                                    <option value="{{ $e->id }}">{{ $e->name }}</option>
+                                @endforeach
+                            </select>
+                        </div>
+                        <div class="sm:col-span-2 flex gap-2">
+                            <button type="button" wire:click="agregarLinea" class="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-medium py-2 px-6 rounded-lg transition">
+                                + Agregar
+                            </button>
+                        </div>
                     </div>
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Estampilla</label>
-                        <select wire:model="estampilla_linea_id" class="form-select w-full">
-                            <option value="">Ninguna</option>
-                            @foreach ($this->estampillas as $e)
-                                <option value="{{ $e->id }}">{{ $e->name }}</option>
-                            @endforeach
-                        </select>
-                    </div>
-                    <div class="sm:col-span-2 flex gap-2">
-                        <button type="button" wire:click="agregarLinea" class="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-medium py-2 px-6 rounded-lg transition">
-                            + Agregar
-                        </button>
-                    </div>
-                </div>
+                @endif
 
                 @if (session()->has('error'))
                     <div class="mt-3 text-sm text-rose-500">{{ session('error') }}</div>
@@ -937,6 +1244,9 @@ new class extends Component
                                         <td class="px-3 py-3 text-center text-gray-500 dark:text-gray-400">{{ $idx + 1 }}</td>
                                         <td class="px-4 py-3">
                                             <p class="font-medium text-gray-800 dark:text-gray-100">{{ $linea['producto_nombre'] }}</p>
+                                            @if ($linea['es_ajuste'] ?? false)
+                                                <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 mt-0.5">AJUSTE</span>
+                                            @endif
                                         </td>
                                         <td class="px-4 py-3 text-right text-gray-800 dark:text-gray-100">{{ $linea['cantidad'] }}</td>
                                         <td class="px-4 py-3 text-right text-gray-800 dark:text-gray-100">$ {{ number_format($linea['valor_costo_unit'], 2, ',', '.') }}</td>
@@ -946,7 +1256,7 @@ new class extends Component
                                         <td class="px-4 py-3 text-right text-gray-800 dark:text-gray-100">$ {{ number_format($linea['valor_iva'] ?? 0, 2, ',', '.') }}</td>
                                         <td class="px-4 py-3 text-right font-semibold text-gray-800 dark:text-gray-100">$ {{ number_format($linea['valor_con_iva'] ?? 0, 2, ',', '.') }}</td>
                                         <td class="px-3 py-3 text-center">
-                                            <button wire:click="eliminarLinea({{ $idx }})" wire:confirm="¿Eliminar esta línea?" class="text-rose-500 hover:text-rose-700 transition" title="Eliminar línea">
+                                            <button wire:click="eliminarLinea({{ $idx }})" class="text-rose-500 hover:text-rose-700 transition" title="Eliminar línea">
                                                 <svg class="w-4 h-4 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
                                             </button>
                                         </td>

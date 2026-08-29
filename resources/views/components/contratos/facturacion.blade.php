@@ -36,6 +36,11 @@ new class extends Component
     public array $retencionesPorLinea = [];
     public array $pendientesPorLinea = [];
 
+    // Modo ajuste
+    public bool $esAjuste = false;
+    public float $valorAjuste = 0;
+    public float $porcentajeIvaAjuste = 19;
+
     // Paso 4: Guardado
     public bool $guardando = false;
 
@@ -100,23 +105,47 @@ new class extends Component
         foreach ($factura->lineas as $fl) {
             $idx = count($this->lineas);
             $item = $fl->itemcontrato;
+            $esAjuste = $fl->es_ajuste ?? false;
 
-            $this->lineas[$idx] = [
-                'factura_linea_id' => $fl->id,
-                'itemcontrato_id' => $fl->itemcontrato_id,
-                'producto_nombre' => $item->producto->name ?? '—',
-                'valor_costo_unit' => $item->valor_costo,
-                'iva_unit' => $item->iva,
-                'valor_iva_unit' => $item->valor_iva,
-                'valor_con_iva_unit' => $item->valor_con_iva,
-                'cantidad' => $fl->cantidad,
-                'tipo_adquisicion' => $fl->tipo_adquisicion ?? 'bien',
-                'municipio_id' => $fl->municipio_id,
-                'estampilla_retencion_id' => $fl->estampilla_retencion_id,
-                'valor_base' => $fl->valor_base,
-                'valor_iva' => $fl->valor_iva,
-                'valor_con_iva' => $fl->valor_con_iva,
-            ];
+            if ($esAjuste) {
+                // Línea de ajuste: usar valores guardados
+                $this->lineas[$idx] = [
+                    'factura_linea_id' => $fl->id,
+                    'itemcontrato_id' => $fl->itemcontrato_id,
+                    'producto_nombre' => $item->producto->name ?? '—',
+                    'valor_costo_unit' => $fl->valor_base,
+                    'iva_unit' => $fl->porcentaje_iva ?? 0,
+                    'valor_iva_unit' => $fl->valor_iva,
+                    'valor_con_iva_unit' => $fl->valor_con_iva,
+                    'cantidad' => $fl->cantidad,
+                    'tipo_adquisicion' => $fl->tipo_adquisicion ?? 'bien',
+                    'municipio_id' => $fl->municipio_id,
+                    'estampilla_retencion_id' => $fl->estampilla_retencion_id,
+                    'valor_base' => $fl->valor_base,
+                    'valor_iva' => $fl->valor_iva,
+                    'valor_con_iva' => $fl->valor_con_iva,
+                    'es_ajuste' => true,
+                    'porcentaje_iva' => $fl->porcentaje_iva,
+                ];
+            } else {
+                // Línea normal: valores del itemcontrato
+                $this->lineas[$idx] = [
+                    'factura_linea_id' => $fl->id,
+                    'itemcontrato_id' => $fl->itemcontrato_id,
+                    'producto_nombre' => $item->producto->name ?? '—',
+                    'valor_costo_unit' => $item->valor_costo,
+                    'iva_unit' => $item->iva,
+                    'valor_iva_unit' => $item->valor_iva,
+                    'valor_con_iva_unit' => $item->valor_con_iva,
+                    'cantidad' => $fl->cantidad,
+                    'tipo_adquisicion' => $fl->tipo_adquisicion ?? 'bien',
+                    'municipio_id' => $fl->municipio_id,
+                    'estampilla_retencion_id' => $fl->estampilla_retencion_id,
+                    'valor_base' => $fl->valor_base,
+                    'valor_iva' => $fl->valor_iva,
+                    'valor_con_iva' => $fl->valor_con_iva,
+                ];
+            }
 
             $this->retencionesPorLinea[$idx] = $fl->retenciones->map(fn($r) => [
                 'retencion' => $r->retencion,
@@ -218,6 +247,9 @@ new class extends Component
         $this->lineas = [];
         $this->retencionesPorLinea = [];
         $this->factura_id = null;
+        $this->esAjuste = false;
+        $this->valorAjuste = 0;
+        $this->porcentajeIvaAjuste = 19;
 
         $numero = trim($this->numcontrato);
         if ($numero === '') {
@@ -225,7 +257,7 @@ new class extends Component
             return;
         }
 
-        $contrato = Contrato::with(['proveedor', 'movirubros', 'itemcontratos.producto'])
+        $contrato = Contrato::with(['proveedor', 'movirubros', 'itemcontratos.producto', 'itemcontratos.movirubro', 'itemcontratos.rubro'])
             ->where('numcontrato', $numero)
             ->first();
 
@@ -299,6 +331,38 @@ new class extends Component
             }
         }
 
+        // Validar saldo de rubros: sumar valor_con_iva de las líneas agrupadas por itemcontrato
+        $porItemcontrato = [];
+        foreach ($this->lineas as $linea) {
+            $itemcontratoId = $linea['itemcontrato_id'];
+            $porItemcontrato[$itemcontratoId] = ($porItemcontrato[$itemcontratoId] ?? 0) + ($linea['valor_con_iva'] ?? 0);
+        }
+
+        foreach ($porItemcontrato as $itemcontratoId => $totalLineas) {
+            $itemcontrato = Itemcontrato::with('movirubro')->find($itemcontratoId);
+            if (!$itemcontrato || !$itemcontrato->movirubro) continue;
+
+            $movirubro = $itemcontrato->movirubro;
+            $saldoDisponible = (float) $movirubro->saldo_rubro;
+
+            $facturasExistentes = \App\Models\FacturaLinea::whereHas('factura', function ($q) use ($movirubro) {
+                $q->where('contrato_id', $this->contrato->id)
+                  ->whereIn('estado', ['borrador', 'emitida']);
+            })->whereHas('itemcontrato', function ($q) use ($movirubro) {
+                $q->where('movirubro_id', $movirubro->id);
+            })->sum('valor_con_iva');
+
+            $saldoRestante = $saldoDisponible - $facturasExistentes;
+
+            if ($totalLineas > $saldoRestante + 0.01) {
+                $nombreRubro = $movirubro->rubro->nombre_rubro ?? 'Sin nombre';
+                $codigoRubro = $movirubro->rubro->codigo_rubro ?? '';
+                $this->dispatch('alerta', tipo: 'error', mensaje: 'El rubro "' . $codigoRubro . ' - ' . $nombreRubro . '" no tiene saldo suficiente. Saldo disponible: $' . number_format($saldoRestante, 2, ',', '.') . ', total de la factura para este rubro: $' . number_format($totalLineas, 2, ',', '.'));
+                $this->guardando = false;
+                return;
+            }
+        }
+
         $servicio = new CalculadoraRetenciones();
 
         $factura = Factura::create([
@@ -321,19 +385,39 @@ new class extends Component
             if (!$itemcontrato) continue;
 
             $cantidad = max(1, (float) ($linea['cantidad'] ?? 1));
+            $esAjuste = $linea['es_ajuste'] ?? false;
 
-    $facturaLinea = FacturaLinea::create([
-        'factura_id' => $factura->id,
-        'itemcontrato_id' => $itemcontrato->id,
-        'producto_id' => $itemcontrato->producto_id,
-        'tipo_adquisicion' => $linea['tipo_adquisicion'] ?? 'bien',
-        'municipio_id' => $linea['municipio_id'] ?? null,
-        'estampilla_retencion_id' => !empty($linea['estampilla_retencion_id']) ? (int) $linea['estampilla_retencion_id'] : null,
-        'valor_base' => $itemcontrato->valor_costo * $cantidad,
-        'valor_iva' => $itemcontrato->valor_iva * $cantidad,
-        'valor_con_iva' => $itemcontrato->valor_con_iva * $cantidad,
-        'cantidad' => $cantidad,
-    ]);
+            if ($esAjuste) {
+                // Línea de ajuste: usar valores personalizados
+                $facturaLinea = FacturaLinea::create([
+                    'factura_id' => $factura->id,
+                    'itemcontrato_id' => $itemcontrato->id,
+                    'producto_id' => $itemcontrato->producto_id,
+                    'tipo_adquisicion' => $linea['tipo_adquisicion'] ?? 'bien',
+                    'municipio_id' => $linea['municipio_id'] ?? null,
+                    'estampilla_retencion_id' => !empty($linea['estampilla_retencion_id']) ? (int) $linea['estampilla_retencion_id'] : null,
+                    'valor_base' => $linea['valor_base'],
+                    'valor_iva' => $linea['valor_iva'],
+                    'valor_con_iva' => $linea['valor_con_iva'],
+                    'cantidad' => 1,
+                    'es_ajuste' => true,
+                    'porcentaje_iva' => $linea['porcentaje_iva'] ?? null,
+                ]);
+            } else {
+                // Línea normal: valores del itemcontrato
+                $facturaLinea = FacturaLinea::create([
+                    'factura_id' => $factura->id,
+                    'itemcontrato_id' => $itemcontrato->id,
+                    'producto_id' => $itemcontrato->producto_id,
+                    'tipo_adquisicion' => $linea['tipo_adquisicion'] ?? 'bien',
+                    'municipio_id' => $linea['municipio_id'] ?? null,
+                    'estampilla_retencion_id' => !empty($linea['estampilla_retencion_id']) ? (int) $linea['estampilla_retencion_id'] : null,
+                    'valor_base' => $itemcontrato->valor_costo * $cantidad,
+                    'valor_iva' => $itemcontrato->valor_iva * $cantidad,
+                    'valor_con_iva' => $itemcontrato->valor_con_iva * $cantidad,
+                    'cantidad' => $cantidad,
+                ]);
+            }
 
             // Calcular retenciones
             $resultado = $servicio->calcularYPersistir($facturaLinea);
@@ -391,6 +475,39 @@ new class extends Component
             }
         }
 
+        // Validar saldo de rubros
+        $porItemcontrato = [];
+        foreach ($this->lineas as $linea) {
+            $itemcontratoId = $linea['itemcontrato_id'];
+            $porItemcontrato[$itemcontratoId] = ($porItemcontrato[$itemcontratoId] ?? 0) + ($linea['valor_con_iva'] ?? 0);
+        }
+
+        foreach ($porItemcontrato as $itemcontratoId => $totalLineas) {
+            $itemcontrato = Itemcontrato::with('movirubro')->find($itemcontratoId);
+            if (!$itemcontrato || !$itemcontrato->movirubro) continue;
+
+            $movirubro = $itemcontrato->movirubro;
+            $saldoDisponible = (float) $movirubro->saldo_rubro;
+
+            $facturasExistentes = \App\Models\FacturaLinea::whereHas('factura', function ($q) use ($movirubro) {
+                $q->where('contrato_id', $this->contrato->id)
+                  ->whereIn('estado', ['borrador', 'emitida'])
+                  ->where('id', '!=', $this->factura_id);
+            })->whereHas('itemcontrato', function ($q) use ($movirubro) {
+                $q->where('movirubro_id', $movirubro->id);
+            })->sum('valor_con_iva');
+
+            $saldoRestante = $saldoDisponible - $facturasExistentes;
+
+            if ($totalLineas > $saldoRestante + 0.01) {
+                $nombreRubro = $movirubro->rubro->nombre_rubro ?? 'Sin nombre';
+                $codigoRubro = $movirubro->rubro->codigo_rubro ?? '';
+                $this->dispatch('alerta', tipo: 'error', mensaje: 'El rubro "' . $codigoRubro . ' - ' . $nombreRubro . '" no tiene saldo suficiente. Saldo disponible: $' . number_format($saldoRestante, 2, ',', '.') . ', total de la factura para este rubro: $' . number_format($totalLineas, 2, ',', '.'));
+                $this->guardando = false;
+                return;
+            }
+        }
+
         $servicio = new CalculadoraRetenciones();
 
         foreach ($this->lineas as $idx => $linea) {
@@ -399,15 +516,31 @@ new class extends Component
                 if (!$facturaLinea) continue;
 
                 $cantidad = max(1, (float) ($linea['cantidad'] ?? 1));
+                $esAjuste = $linea['es_ajuste'] ?? false;
 
-                $facturaLinea->update([
-                    'cantidad' => $cantidad,
-                    'municipio_id' => $linea['municipio_id'] ?? null,
-                    'estampilla_retencion_id' => !empty($linea['estampilla_retencion_id']) ? (int) $linea['estampilla_retencion_id'] : null,
-                    'valor_base' => $facturaLinea->itemcontrato->valor_costo * $cantidad,
-                    'valor_iva' => $facturaLinea->itemcontrato->valor_iva * $cantidad,
-                    'valor_con_iva' => $facturaLinea->itemcontrato->valor_con_iva * $cantidad,
-                ]);
+                if ($esAjuste) {
+                    // Línea de ajuste: usar valores personalizados
+                    $facturaLinea->update([
+                        'cantidad' => 1,
+                        'municipio_id' => $linea['municipio_id'] ?? null,
+                        'estampilla_retencion_id' => !empty($linea['estampilla_retencion_id']) ? (int) $linea['estampilla_retencion_id'] : null,
+                        'valor_base' => $linea['valor_base'],
+                        'valor_iva' => $linea['valor_iva'],
+                        'valor_con_iva' => $linea['valor_con_iva'],
+                        'es_ajuste' => true,
+                        'porcentaje_iva' => $linea['porcentaje_iva'] ?? null,
+                    ]);
+                } else {
+                    // Línea normal: valores del itemcontrato
+                    $facturaLinea->update([
+                        'cantidad' => $cantidad,
+                        'municipio_id' => $linea['municipio_id'] ?? null,
+                        'estampilla_retencion_id' => !empty($linea['estampilla_retencion_id']) ? (int) $linea['estampilla_retencion_id'] : null,
+                        'valor_base' => $facturaLinea->itemcontrato->valor_costo * $cantidad,
+                        'valor_iva' => $facturaLinea->itemcontrato->valor_iva * $cantidad,
+                        'valor_con_iva' => $facturaLinea->itemcontrato->valor_con_iva * $cantidad,
+                    ]);
+                }
 
                 $servicio->calcularYPersistir($facturaLinea);
             } else {
@@ -551,9 +684,116 @@ new class extends Component
         array_splice($this->pendientesPorLinea, $indice, 1);
     }
 
+    // ------------------------------------------------------------------
+    // Agregar línea de ajuste
+    // ------------------------------------------------------------------
+
+    public function agregarLineaAjuste(int $itemcontratoId): void
+    {
+        $item = Itemcontrato::with('producto')->find($itemcontratoId);
+        if (!$item) return;
+
+        if ($this->valorAjuste <= 0) {
+            session()->flash('error', 'El valor del ajuste debe ser mayor a cero.');
+            return;
+        }
+
+        if ($this->porcentajeIvaAjuste < 0 || $this->porcentajeIvaAjuste > 100) {
+            session()->flash('error', 'El porcentaje de IVA debe estar entre 0 y 100.');
+            return;
+        }
+
+        $tipo = $item->producto->tipo ?? 'bien';
+
+        if ($tipo === 'servicio' && !$item->producto->municipio_id) {
+            $this->dispatch('alerta', tipo: 'warning', mensaje: 'El servicio "' . $item->producto->name . '" no tiene municipio asignado. Seleccione un municipio en la línea para calcular Reteica.');
+        }
+
+        // Calcular base e IVA desde el valor total (con IVA)
+        $divisor = 100 + $this->porcentajeIvaAjuste;
+        $valorIva = round($this->valorAjuste * ($this->porcentajeIvaAjuste / $divisor), 2);
+        $valorBase = round($this->valorAjuste - $valorIva, 2);
+
+        $municipioLinea = ($item->producto->tipo ?? 'bien') === 'servicio'
+            ? $item->producto->municipio_id
+            : $this->municipio_default_id;
+
+        if ($this->editando && $this->factura_id) {
+            $facturaLinea = FacturaLinea::create([
+                'factura_id' => $this->factura_id,
+                'itemcontrato_id' => $item->id,
+                'producto_id' => $item->producto_id,
+                'tipo_adquisicion' => $tipo,
+                'municipio_id' => $municipioLinea,
+                'estampilla_retencion_id' => !empty($this->estampilla_default_id) ? (int) $this->estampilla_default_id : null,
+                'valor_base' => $valorBase,
+                'valor_iva' => $valorIva,
+                'valor_con_iva' => $this->valorAjuste,
+                'cantidad' => 1,
+                'es_ajuste' => true,
+                'porcentaje_iva' => $this->porcentajeIvaAjuste,
+            ]);
+
+            $servicio = new CalculadoraRetenciones();
+            $resultado = $servicio->calcularYPersistir($facturaLinea);
+
+            $idx = count($this->lineas);
+            $this->lineas[$idx] = [
+                'factura_linea_id' => $facturaLinea->id,
+                'itemcontrato_id' => $item->id,
+                'producto_nombre' => $item->producto->name,
+                'valor_costo_unit' => $valorBase,
+                'iva_unit' => $this->porcentajeIvaAjuste,
+                'valor_iva_unit' => $valorIva,
+                'valor_con_iva_unit' => $this->valorAjuste,
+                'cantidad' => 1,
+                'tipo_adquisicion' => $tipo,
+                'municipio_id' => $municipioLinea,
+                'estampilla_retencion_id' => !empty($this->estampilla_default_id) ? (int) $this->estampilla_default_id : null,
+                'valor_base' => $valorBase,
+                'valor_iva' => $valorIva,
+                'valor_con_iva' => $this->valorAjuste,
+                'es_ajuste' => true,
+                'porcentaje_iva' => $this->porcentajeIvaAjuste,
+            ];
+
+            $this->retencionesPorLinea[$idx] = $resultado['calculadas'];
+            $this->pendientesPorLinea[$idx] = $resultado['pendientes'];
+        } else {
+            $this->lineas[] = [
+                'itemcontrato_id' => $item->id,
+                'producto_nombre' => $item->producto->name,
+                'valor_costo_unit' => $valorBase,
+                'iva_unit' => $this->porcentajeIvaAjuste,
+                'valor_iva_unit' => $valorIva,
+                'valor_con_iva_unit' => $this->valorAjuste,
+                'cantidad' => 1,
+                'tipo_adquisicion' => $tipo,
+                'municipio_id' => $municipioLinea,
+                'estampilla_retencion_id' => !empty($this->estampilla_default_id) ? (int) $this->estampilla_default_id : null,
+                'valor_base' => $valorBase,
+                'valor_iva' => $valorIva,
+                'valor_con_iva' => $this->valorAjuste,
+                'es_ajuste' => true,
+                'porcentaje_iva' => $this->porcentajeIvaAjuste,
+            ];
+
+            $this->calcularRetencionesLinea(count($this->lineas) - 1);
+        }
+
+        // Reset
+        $this->valorAjuste = 0;
+        $this->porcentajeIvaAjuste = 19;
+    }
+
     public function updatedLineas(): void
     {
         foreach ($this->lineas as $idx => $linea) {
+            // Saltar recálculo para líneas de ajuste (valores fijos)
+            if ($linea['es_ajuste'] ?? false) {
+                $this->calcularRetencionesLinea($idx);
+                continue;
+            }
             $this->lineas[$idx]['valor_base'] = round($linea['valor_costo_unit'] * max(1, $linea['cantidad']), 2);
             $this->lineas[$idx]['valor_iva'] = round($linea['valor_iva_unit'] * max(1, $linea['cantidad']), 2);
             $this->lineas[$idx]['valor_con_iva'] = round($linea['valor_con_iva_unit'] * max(1, $linea['cantidad']), 2);
@@ -567,10 +807,15 @@ new class extends Component
 
         $linea = $this->lineas[$idx];
 
+        // Para ajustes: usar producto_id directamente
+        $productoId = $linea['es_ajuste'] ?? false
+            ? ($this->contrato->itemcontratos->firstWhere('producto_id', $linea['itemcontrato_id'] ?? null)?->producto_id ?? $linea['itemcontrato_id'] ?? null)
+            : Itemcontrato::find($linea['itemcontrato_id'])?->producto_id;
+
         $facturaLinea = new FacturaLinea([
             'factura_id' => $this->factura_id ?? 0,
-            'itemcontrato_id' => $linea['itemcontrato_id'],
-            'producto_id' => Itemcontrato::find($linea['itemcontrato_id'])?->producto_id,
+            'itemcontrato_id' => $linea['itemcontrato_id'] ?? null,
+            'producto_id' => $productoId,
             'tipo_adquisicion' => $linea['tipo_adquisicion'] ?? 'bien',
             'municipio_id' => $linea['municipio_id'] ?? null,
             'estampilla_retencion_id' => $linea['estampilla_retencion_id'] ?? null,
@@ -642,6 +887,13 @@ new class extends Component
     {
         $parts = explode('.', $key);
         $idx = (int) $parts[0];
+
+        // Saltar recálculo para líneas de ajuste (valores fijos)
+        if ($this->lineas[$idx]['es_ajuste'] ?? false) {
+            $this->calcularRetencionesLinea($idx);
+            return;
+        }
+
         $this->lineas[$idx]['valor_base'] = round($this->lineas[$idx]['valor_costo_unit'] * max(1, $value), 2);
         $this->lineas[$idx]['valor_iva'] = round($this->lineas[$idx]['valor_iva_unit'] * max(1, $value), 2);
         $this->lineas[$idx]['valor_con_iva'] = round($this->lineas[$idx]['valor_con_iva_unit'] * max(1, $value), 2);
@@ -659,7 +911,7 @@ new class extends Component
 
     public function resetForm(): void
     {
-        $this->reset(['numcontrato', 'contrato', 'contratoError', 'factura_id', 'numero_factura', 'fecha_factura', 'numero_migo', 'fecha_migo', 'municipio_default_id', 'estampilla_default_id', 'dependencia_id', 'lineas', 'retencionesPorLinea', 'pendientesPorLinea', 'editando', 'estadoFactura']);
+        $this->reset(['numcontrato', 'contrato', 'contratoError', 'factura_id', 'numero_factura', 'fecha_factura', 'numero_migo', 'fecha_migo', 'municipio_default_id', 'estampilla_default_id', 'dependencia_id', 'lineas', 'retencionesPorLinea', 'pendientesPorLinea', 'editando', 'estadoFactura', 'esAjuste', 'valorAjuste', 'porcentajeIvaAjuste']);
         $this->resetValidation();
     }
 };
@@ -701,7 +953,6 @@ new class extends Component
             </template>
             <template x-if="tipo === 'warning'">
                 <svg class="w-6 h-6 flex-shrink-0 text-amber-500 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z"/></svg>
-            </template>
             </template>
             <p class="flex-1 text-sm font-semibold" x-text="mensaje"></p>
             <button @click="show = false" class="flex-shrink-0 ml-2 opacity-50 hover:opacity-100 transition">
@@ -794,49 +1045,148 @@ new class extends Component
         {{-- PASO 3: Seleccionar productos (itemcontratos) --}}
         @if (!$factura_id || $editando)
             <div class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6 mb-6">
-                <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-4">{{ $editando ? 'Agregar Productos del Contrato' : '3. Seleccionar Productos del Contrato' }}</h2>
-                <div class="overflow-x-auto">
-                    <table class="w-full text-sm">
-                        <thead>
-                            <tr class="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">
-                                <th class="px-4 py-3 text-left">Producto</th>
-                                <th class="px-4 py-3 text-right">Valor Unit.</th>
-                                <th class="px-4 py-3 center">IVA %</th>
-                                <th class="px-4 py-3 text-right">Valor c/IVA</th>
-                                <th class="px-4 py-3 text-center">Acción</th>
-                            </tr>
-                        </thead>
-                        <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
-                            @php
-                                $itemsDisponibles = $editando ? $this->itemcontratosDisponibles : $contrato->itemcontratos;
-                            @endphp
-                            @forelse ($itemsDisponibles as $item)
-                                @php
-                                    $yaSeleccionado = !$editando && collect($this->lineas)->contains('itemcontrato_id', $item->id);
-                                @endphp
-                                <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50">
-                                    <td class="px-4 py-3 font-medium text-gray-900 dark:text-gray-100">{{ $item->producto->name ?? '-' }}</td>
-                                    <td class="px-4 py-3 text-right text-gray-600 dark:text-gray-400">${{ number_format($item->valor_costo, 2, ',', '.') }}</td>
-                                    <td class="px-4 py-3 center text-gray-600 dark:text-gray-400">{{ $item->iva }}%</td>
-                                    <td class="px-4 py-3 text-right font-semibold text-gray-900 dark:text-gray-100">${{ number_format($item->valor_con_iva, 2, ',', '.') }}</td>
-                                    <td class="px-4 py-3 text-center">
-                                        @if ($yaSeleccionado)
-                                            <span class="text-xs text-emerald-600 dark:text-emerald-400 font-medium">✓ Seleccionado</span>
-                                        @else
-                                            <button wire:click="agregarLinea({{ $item->id }})" class="px-3 py-1 text-xs font-medium rounded-lg bg-violet-50 text-violet-700 hover:bg-violet-100 dark:bg-violet-900/30 dark:text-violet-400 transition">
-                                                Agregar
-                                            </button>
-                                        @endif
-                                    </td>
-                                </tr>
-                            @empty
-                                <tr>
-                                    <td colspan="5" class="px-4 py-4 text-center text-sm text-gray-500 dark:text-gray-400">No hay productos disponibles.</td>
-                                </tr>
-                            @endforelse
-                        </tbody>
-                    </table>
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">
+                        {{ $esAjuste ? 'Agregar Ajuste' : ($editando ? 'Agregar Productos del Contrato' : '3. Seleccionar Productos del Contrato') }}
+                    </h2>
+                    <button type="button" wire:click="$set('esAjuste', {{ $esAjuste ? 'false' : 'true' }})"
+                            class="px-3 py-1.5 text-xs font-medium rounded-lg transition
+                            {{ $esAjuste
+                                ? 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400'
+                                : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300' }}">
+                        {{ $esAjuste ? 'Modo Ajuste ACTIVO' : 'Modo Ajuste' }}
+                    </button>
                 </div>
+
+                @if ($esAjuste)
+                    {{-- Modo Ajuste --}}
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Valor Total (con IVA) *</label>
+                            <input type="number" wire:model="valorAjuste" min="0" step="0.01" class="w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300" placeholder="Ej: 50000" />
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">% IVA</label>
+                            <input type="number" wire:model="porcentajeIvaAjuste" min="0" max="100" step="0.01" class="w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300" />
+                        </div>
+                        <div class="lg:col-span-2">
+                            <p class="text-xs text-gray-500 dark:text-gray-400 mb-1">Seleccione un producto de la tabla y haga clic en "Agregar Ajuste"</p>
+                        </div>
+                    </div>
+
+                    @if ($valorAjuste > 0)
+                        @php
+                            $divisorIva = 100 + $porcentajeIvaAjuste;
+                            $ivaPreview = round($valorAjuste * ($porcentajeIvaAjuste / $divisorIva), 2);
+                            $basePreview = round($valorAjuste - $ivaPreview, 2);
+                        @endphp
+                        <div class="mt-4 p-4 bg-amber-50 dark:bg-amber-900/20 rounded-lg border border-amber-200 dark:border-amber-700">
+                            <p class="text-sm font-medium text-amber-600 dark:text-amber-400 mb-2">Detalle del ajuste:</p>
+                            <div class="grid grid-cols-3 gap-3 text-sm">
+                                <div class="rounded-lg bg-white dark:bg-gray-800 px-3 py-2">
+                                    <span class="text-xs text-gray-500">Subtotal (base)</span>
+                                    <p class="font-semibold text-gray-800 dark:text-gray-100">$ {{ number_format($basePreview, 2, ',', '.') }}</p>
+                                </div>
+                                <div class="rounded-lg bg-white dark:bg-gray-800 px-3 py-2">
+                                    <span class="text-xs text-gray-500">IVA ({{ $porcentajeIvaAjuste }}%)</span>
+                                    <p class="font-semibold text-gray-800 dark:text-gray-100">$ {{ number_format($ivaPreview, 2, ',', '.') }}</p>
+                                </div>
+                                <div class="rounded-lg bg-white dark:bg-gray-800 px-3 py-2">
+                                    <span class="text-xs text-gray-500">Total Ajuste</span>
+                                    <p class="font-bold text-amber-700 dark:text-amber-400">$ {{ number_format($valorAjuste, 2, ',', '.') }}</p>
+                                </div>
+                            </div>
+                        </div>
+                    @endif
+
+                    <div class="overflow-x-auto mt-4">
+                        <table class="w-full text-sm">
+                            <thead>
+                                <tr class="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">
+                                    <th class="px-4 py-3 text-left">Producto</th>
+                                    <th class="px-4 py-3 text-left">Rubro</th>
+                                    <th class="px-4 py-3 text-right">Valor Unit.</th>
+                                    <th class="px-4 py-3 center">IVA %</th>
+                                    <th class="px-4 py-3 text-right">Valor c/IVA</th>
+                                    <th class="px-4 py-3 text-center">Acción</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
+                                @forelse ($contrato->itemcontratos as $item)
+                                    <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                                        <td class="px-4 py-3 font-medium text-gray-900 dark:text-gray-100">{{ $item->producto->name ?? '-' }}</td>
+                                        <td class="px-4 py-3 text-gray-600 dark:text-gray-400">
+                                            {{ $item->rubro->codigo_rubro ?? '-' }} - {{ $item->rubro->nombre_rubro ?? '-' }}
+                                            <span class="block text-[10px] text-emerald-500 dark:text-emerald-400">Saldo: ${{ number_format($item->movirubro?->saldo_rubro ?? 0, 2, ',', '.') }}</span>
+                                        </td>
+                                        <td class="px-4 py-3 text-right text-gray-600 dark:text-gray-400">${{ number_format($item->valor_costo, 2, ',', '.') }}</td>
+                                        <td class="px-4 py-3 center text-gray-600 dark:text-gray-400">{{ $item->iva }}%</td>
+                                        <td class="px-4 py-3 text-right font-semibold text-gray-900 dark:text-gray-100">${{ number_format($item->valor_con_iva, 2, ',', '.') }}</td>
+                                        <td class="px-4 py-3 text-center">
+                                            <button wire:click="agregarLineaAjuste({{ $item->id }})" class="px-3 py-1 text-xs font-medium rounded-lg bg-amber-50 text-amber-700 hover:bg-amber-100 dark:bg-amber-900/30 dark:text-amber-400 transition">
+                                                + Agregar Ajuste
+                                            </button>
+                                        </td>
+                                    </tr>
+                                @empty
+                                    <tr>
+                                        <td colspan="6" class="px-4 py-4 text-center text-sm text-gray-500 dark:text-gray-400">No hay productos disponibles.</td>
+                                    </tr>
+                                @endforelse
+                            </tbody>
+                        </table>
+                    </div>
+
+                @else
+                    {{-- Modo Producto Normal --}}
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-sm">
+                            <thead>
+                                <tr class="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">
+                                    <th class="px-4 py-3 text-left">Producto</th>
+                                    <th class="px-4 py-3 text-left">Rubro</th>
+                                    <th class="px-4 py-3 text-right">Valor Unit.</th>
+                                    <th class="px-4 py-3 center">IVA %</th>
+                                    <th class="px-4 py-3 text-right">Valor c/IVA</th>
+                                    <th class="px-4 py-3 text-center">Acción</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
+                                @php
+                                    $itemsDisponibles = $editando ? $this->itemcontratosDisponibles : $contrato->itemcontratos;
+                                @endphp
+                                @forelse ($itemsDisponibles as $item)
+                                    @php
+                                        $yaSeleccionado = !$editando && collect($this->lineas)->contains('itemcontrato_id', $item->id);
+                                    @endphp
+                                    <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                                        <td class="px-4 py-3 font-medium text-gray-900 dark:text-gray-100">{{ $item->producto->name ?? '-' }}</td>
+                                        <td class="px-4 py-3 text-gray-600 dark:text-gray-400">
+                                            {{ $item->rubro->codigo_rubro ?? '-' }} - {{ $item->rubro->nombre_rubro ?? '-' }}
+                                            <span class="block text-[10px] text-emerald-500 dark:text-emerald-400">Saldo: ${{ number_format($item->movirubro?->saldo_rubro ?? 0, 2, ',', '.') }}</span>
+                                        </td>
+                                        <td class="px-4 py-3 text-right text-gray-600 dark:text-gray-400">${{ number_format($item->valor_costo, 2, ',', '.') }}</td>
+                                        <td class="px-4 py-3 center text-gray-600 dark:text-gray-400">{{ $item->iva }}%</td>
+                                        <td class="px-4 py-3 text-right font-semibold text-gray-900 dark:text-gray-100">${{ number_format($item->valor_con_iva, 2, ',', '.') }}</td>
+                                        <td class="px-4 py-3 text-center">
+                                            @if ($yaSeleccionado)
+                                                <span class="text-xs text-emerald-600 dark:text-emerald-400 font-medium">✓ Seleccionado</span>
+                                            @else
+                                                <button wire:click="agregarLinea({{ $item->id }})" class="px-3 py-1 text-xs font-medium rounded-lg bg-violet-50 text-violet-700 hover:bg-violet-100 dark:bg-violet-900/30 dark:text-violet-400 transition">
+                                                    Agregar
+                                                </button>
+                                            @endif
+                                        </td>
+                                    </tr>
+                                @empty
+                                    <tr>
+                                        <td colspan="6" class="px-4 py-4 text-center text-sm text-gray-500 dark:text-gray-400">No hay productos disponibles.</td>
+                                    </tr>
+                                @endforelse
+                            </tbody>
+                        </table>
+                    </div>
+                @endif
             </div>
         @endif
 
@@ -863,7 +1213,12 @@ new class extends Component
                 @foreach ($this->lineas as $idx => $linea)
                     <div class="border border-gray-200 dark:border-gray-700 rounded-lg p-4 mb-4 last:mb-0">
                         <div class="flex items-center justify-between mb-3">
-                            <h3 class="font-semibold text-gray-800 dark:text-gray-100">{{ $linea['producto_nombre'] }}</h3>
+                            <div class="flex items-center gap-2">
+                                <h3 class="font-semibold text-gray-800 dark:text-gray-100">{{ $linea['producto_nombre'] }}</h3>
+                                @if ($linea['es_ajuste'] ?? false)
+                                    <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">AJUSTE</span>
+                                @endif
+                            </div>
                             <div class="flex items-center gap-2">
                                 <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium {{ ($linea['tipo_adquisicion'] ?? 'bien') === 'bien' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' : 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' }}">
                                     {{ ($linea['tipo_adquisicion'] ?? 'bien') === 'bien' ? 'Bien' : 'Servicio' }}

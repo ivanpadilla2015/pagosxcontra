@@ -19,6 +19,8 @@ class FacturaLinea extends Model
         'valor_con_iva',
         'cantidad',
         'estampilla_retencion_id',
+        'es_ajuste',
+        'porcentaje_iva',
     ];
 
     protected $casts = [
@@ -26,6 +28,8 @@ class FacturaLinea extends Model
         'valor_iva' => 'decimal:2',
         'valor_con_iva' => 'decimal:2',
         'cantidad' => 'decimal:2',
+        'es_ajuste' => 'boolean',
+        'porcentaje_iva' => 'decimal:2',
     ];
 
     public function factura(): BelongsTo

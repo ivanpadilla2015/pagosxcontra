@@ -75,22 +75,47 @@ new class extends Component
 
         foreach ($this->factura->lineas as $linea) {
             $idx = count($this->lineas);
-            $this->lineas[$idx] = [
-                'factura_linea_id' => $linea->id,
-                'itemcontrato_id' => $linea->itemcontrato_id,
-                'producto_nombre' => $linea->itemcontrato->producto->name ?? '-',
-                'valor_costo_unit' => $linea->itemcontrato->valor_costo ?? 0,
-                'iva_unit' => $linea->itemcontrato->iva ?? 0,
-                'valor_iva_unit' => $linea->itemcontrato->valor_iva ?? 0,
-                'valor_con_iva_unit' => $linea->itemcontrato->valor_con_iva ?? 0,
-                'cantidad' => $linea->cantidad,
-                'tipo_adquisicion' => $linea->tipo_adquisicion,
-                'municipio_id' => $linea->municipio_id,
-                'estampilla_retencion_id' => $linea->estampilla_retencion_id,
-                'valor_base' => $linea->valor_base,
-                'valor_iva' => $linea->valor_iva,
-                'valor_con_iva' => $linea->valor_con_iva,
-            ];
+            $esAjuste = $linea->es_ajuste ?? false;
+
+            if ($esAjuste) {
+                // Línea de ajuste: usar valores guardados
+                $this->lineas[$idx] = [
+                    'factura_linea_id' => $linea->id,
+                    'itemcontrato_id' => $linea->itemcontrato_id,
+                    'producto_nombre' => $linea->itemcontrato->producto->name ?? '-',
+                    'valor_costo_unit' => $linea->valor_base,
+                    'iva_unit' => $linea->porcentaje_iva ?? 0,
+                    'valor_iva_unit' => $linea->valor_iva,
+                    'valor_con_iva_unit' => $linea->valor_con_iva,
+                    'cantidad' => $linea->cantidad,
+                    'tipo_adquisicion' => $linea->tipo_adquisicion,
+                    'municipio_id' => $linea->municipio_id,
+                    'estampilla_retencion_id' => $linea->estampilla_retencion_id,
+                    'valor_base' => $linea->valor_base,
+                    'valor_iva' => $linea->valor_iva,
+                    'valor_con_iva' => $linea->valor_con_iva,
+                    'es_ajuste' => true,
+                    'porcentaje_iva' => $linea->porcentaje_iva,
+                ];
+            } else {
+                // Línea normal: valores del itemcontrato
+                $this->lineas[$idx] = [
+                    'factura_linea_id' => $linea->id,
+                    'itemcontrato_id' => $linea->itemcontrato_id,
+                    'producto_nombre' => $linea->itemcontrato->producto->name ?? '-',
+                    'valor_costo_unit' => $linea->itemcontrato->valor_costo ?? 0,
+                    'iva_unit' => $linea->itemcontrato->iva ?? 0,
+                    'valor_iva_unit' => $linea->itemcontrato->valor_iva ?? 0,
+                    'valor_con_iva_unit' => $linea->itemcontrato->valor_con_iva ?? 0,
+                    'cantidad' => $linea->cantidad,
+                    'tipo_adquisicion' => $linea->tipo_adquisicion,
+                    'municipio_id' => $linea->municipio_id,
+                    'estampilla_retencion_id' => $linea->estampilla_retencion_id,
+                    'valor_base' => $linea->valor_base,
+                    'valor_iva' => $linea->valor_iva,
+                    'valor_con_iva' => $linea->valor_con_iva,
+                ];
+            }
 
             $this->retencionesPorLinea[$idx] = $linea->retenciones->map(fn ($r) => [
                 'retencion' => $r->retencion,
@@ -105,6 +130,13 @@ new class extends Component
     {
         $parts = explode('.', $key);
         $idx = (int) $parts[0];
+
+        // Saltar recálculo para líneas de ajuste (valores fijos)
+        if ($this->lineas[$idx]['es_ajuste'] ?? false) {
+            $this->recalcularRetencionesLinea($idx);
+            return;
+        }
+
         $this->lineas[$idx]['valor_base'] = round($this->lineas[$idx]['valor_costo_unit'] * max(1, $value), 2);
         $this->lineas[$idx]['valor_iva'] = round($this->lineas[$idx]['valor_iva_unit'] * max(1, $value), 2);
         $this->lineas[$idx]['valor_con_iva'] = round($this->lineas[$idx]['valor_con_iva_unit'] * max(1, $value), 2);
@@ -152,10 +184,15 @@ new class extends Component
 
         $linea = $this->lineas[$idx];
 
+        // Para ajustes: usar producto_id directamente
+        $productoId = $linea['es_ajuste'] ?? false
+            ? ($this->factura->contrato->itemcontratos->firstWhere('producto_id', $linea['itemcontrato_id'] ?? null)?->producto_id ?? $linea['itemcontrato_id'] ?? null)
+            : Itemcontrato::find($linea['itemcontrato_id'])?->producto_id;
+
         $facturaLinea = new FacturaLinea([
             'factura_id' => $this->facturaId,
-            'itemcontrato_id' => $linea['itemcontrato_id'],
-            'producto_id' => Itemcontrato::find($linea['itemcontrato_id'])?->producto_id,
+            'itemcontrato_id' => $linea['itemcontrato_id'] ?? null,
+            'producto_id' => $productoId,
             'tipo_adquisicion' => $linea['tipo_adquisicion'],
             'municipio_id' => $linea['municipio_id'],
             'estampilla_retencion_id' => $linea['estampilla_retencion_id'] ?? null,
@@ -191,14 +228,31 @@ new class extends Component
 
             if (!$facturaLinea) continue;
 
-            $facturaLinea->update([
-                'cantidad' => $linea['cantidad'],
-                'municipio_id' => $linea['municipio_id'],
-                'estampilla_retencion_id' => $linea['estampilla_retencion_id'] ?? null,
-                'valor_base' => $linea['valor_base'],
-                'valor_iva' => $linea['valor_iva'],
-                'valor_con_iva' => $linea['valor_base'] + $linea['valor_iva'],
-            ]);
+            $esAjuste = $linea['es_ajuste'] ?? false;
+
+            if ($esAjuste) {
+                // Línea de ajuste: usar valores personalizados
+                $facturaLinea->update([
+                    'cantidad' => 1,
+                    'municipio_id' => $linea['municipio_id'],
+                    'estampilla_retencion_id' => $linea['estampilla_retencion_id'] ?? null,
+                    'valor_base' => $linea['valor_base'],
+                    'valor_iva' => $linea['valor_iva'],
+                    'valor_con_iva' => $linea['valor_con_iva'],
+                    'es_ajuste' => true,
+                    'porcentaje_iva' => $linea['porcentaje_iva'] ?? null,
+                ]);
+            } else {
+                // Línea normal: valores del itemcontrato
+                $facturaLinea->update([
+                    'cantidad' => $linea['cantidad'],
+                    'municipio_id' => $linea['municipio_id'],
+                    'estampilla_retencion_id' => $linea['estampilla_retencion_id'] ?? null,
+                    'valor_base' => $linea['valor_base'],
+                    'valor_iva' => $linea['valor_iva'],
+                    'valor_con_iva' => $linea['valor_base'] + $linea['valor_iva'],
+                ]);
+            }
 
             $servicio->calcularYPersistir($facturaLinea);
         }
@@ -410,7 +464,12 @@ new class extends Component
                 @foreach ($this->lineas as $idx => $linea)
                     <div class="border border-gray-200 dark:border-gray-700 rounded-lg p-4 mb-4 last:mb-0">
                         <div class="flex items-center justify-between mb-3">
-                            <h3 class="font-semibold text-gray-800 dark:text-gray-100">{{ $linea['producto_nombre'] }}</h3>
+                            <div class="flex items-center gap-2">
+                                <h3 class="font-semibold text-gray-800 dark:text-gray-100">{{ $linea['producto_nombre'] }}</h3>
+                                @if ($linea['es_ajuste'] ?? false)
+                                    <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">AJUSTE</span>
+                                @endif
+                            </div>
                             <div class="flex items-center gap-2">
                                 <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium {{ $linea['tipo_adquisicion'] === 'bien' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' : 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' }}">
                                     {{ $linea['tipo_adquisicion'] === 'bien' ? 'Bien' : 'Servicio' }}
