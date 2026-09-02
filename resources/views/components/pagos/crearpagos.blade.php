@@ -198,6 +198,12 @@ new class extends Component
             // Marcar pago como anulado
             $pago->update(['estado' => 'anulada']);
 
+            // Revertir consecutivo de pagos
+            $contrato = $pago->contrato;
+            if ($contrato && $contrato->cansecu_pagos > 0) {
+                $contrato->update(['cansecu_pagos' => $contrato->cansecu_pagos - 1]);
+            }
+
             DB::commit();
 
             session()->flash('message', 'Pago ' . $this->pagoToAnularNumero . ' anulado. Saldos revertidos.');

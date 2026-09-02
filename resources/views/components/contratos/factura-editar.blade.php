@@ -19,6 +19,8 @@ new class extends Component
     public string $estampilla_default_id = '';
     public string $numero_migo = '';
     public string $fecha_migo = '';
+    public string $nota_credito = '';
+    public ?float $nota_credito_valor = null;
 
     #[Livewire\Attributes\Computed]
     public function municipios()
@@ -69,6 +71,8 @@ new class extends Component
         $this->municipio_default_id = $this->factura->municipio_id;
         $this->numero_migo = $this->factura->numero_migo ?? '';
         $this->fecha_migo = $this->factura->fecha_migo ? $this->factura->fecha_migo->format('Y-m-d') : '';
+        $this->nota_credito = $this->factura->nota_credito ?? '';
+        $this->nota_credito_valor = $this->factura->nota_credito_valor;
 
         $primeraEstampilla = $this->factura->lineas->firstWhere('estampilla_retencion_id')?->estampilla_retencion_id;
         $this->estampilla_default_id = $primeraEstampilla ? (string) $primeraEstampilla : '';
@@ -261,6 +265,8 @@ new class extends Component
             'municipio_id' => $this->municipio_default_id,
             'numero_migo' => $this->numero_migo ?: null,
             'fecha_migo' => $this->fecha_migo ?: null,
+            'nota_credito' => $this->nota_credito ?: null,
+            'nota_credito_valor' => $this->nota_credito_valor,
             'subtotal' => $this->totalFactura['subtotal'],
             'total_iva' => $this->totalFactura['total_iva'],
             'total_retenciones' => $this->totalFactura['total_retenciones'],
@@ -412,6 +418,16 @@ new class extends Component
                             <option value="{{ $e->id }}">{{ $e->name }}</option>
                         @endforeach
                     </select>
+                </div>
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">N° Nota Crédito</label>
+                    <input type="text" wire:model="nota_credito" class="form-input w-full" placeholder="Opcional" />
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Valor Nota Crédito</label>
+                    <input type="number" wire:model="nota_credito_valor" min="0" step="0.01" class="form-input w-full" placeholder="0.00" />
                 </div>
             </div>
         </div>

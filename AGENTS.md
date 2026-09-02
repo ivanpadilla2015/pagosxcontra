@@ -163,7 +163,7 @@ $proveedor->retencionesAplicables; // Collection<Retencion>
 2. Se muestra saldo disponible: `SUM(movirubros.saldo_rubro)`
 3. Se muestran itemcontratos del contrato
 4. Usuario selecciona cuáles incluir en la factura
-5. Usuario ingresa: número factura, fecha, municipio por defecto, **estampilla por defecto**, **dependencia/comedor (requerido)**
+5. Usuario ingresa: número factura, fecha, municipio por defecto, **estampilla por defecto**, **dependencia/comedor (requerido)**, **nota de crédito (opcional)**, **valor nota de crédito (opcional)**
 6. Por cada línea: cantidad, tipo_adquisicion (bien/servicio), municipio, estampilla
 7. Sistema calcula: valor_base, valor_iva, retenciones automáticamente
 8. Totales se calculan sumando líneas
@@ -337,6 +337,7 @@ Grupo "Contratos" con sub-items: Obligación, Importar Obligaciones, Riesgos, Im
 - Estados: `borrador`, `emitida`, `anulada`
 - Relaciones: `proveedor()`, `contrato()`, `municipio()`, `dependencia()`, `lineas()` ← **ordenado por `id`**
 - Método estático: `siguienteNumero($proveedorId, $year)` → genera `{num}-{year}`
+- Campos nota crédito: `nota_credito` (string nullable), `nota_credito_valor` (decimal nullable) — campos opcionales para registrar notas de crédito asociadas
 
 ### FacturaLinea
 - Tabla: `factura_lineas`
@@ -618,7 +619,7 @@ Grupo "Contratos" con sub-items: Obligación, Importar Obligaciones, Riesgos, Im
 - **Botón imprimir**: placeholder para reporte futuro (`imprimirInforme($id)`)
 - **Módulo de Dependencias/Comedores** (`/otros/dependencias`): CRUD completo con selects de municipio, regional y campo dirección
 - **Campo `dependencia_id` en facturas**: FK nullable a `dependencias`, requerido al facturar
-- **Selector de dependencia en facturar**: dropdown en sección "Datos de la Factura" (junto a MIGO, Fecha MIGO y Estampilla), requerido
+- **Selector de dependencia en facturar**: dropdown en sección "Datos de la Factura" (junto a MIGO, Fecha MIGO, Estampilla, **Nota Crédito** y **Valor Nota Crédito**), requerido
 - **Seeders de municipios y dependencias**: `MunicipioSeeder` (13 registros), `DependenciaSeeder` (17 registros)
 - **Municipio con regional**: campo `regional_id` (FK nullable) en tabla `municipios`. Modelo `Municipio` con relación `regional()`. Seeder actualizado con `regional_id = 1` para todos
 - **Dependencias filtradas por regional**: en componentes `facturar.blade.php` y `facturacion.blade.php`, el select de Dependencia/Comedor filtra por `regional_id` del usuario autenticado. Si el usuario no tiene regional, muestra todas (fallback)
@@ -782,3 +783,4 @@ Grupo "Contratos" con sub-items: Obligación, Importar Obligaciones, Riesgos, Im
 73. **Saldo visible en selector de productos**: cada producto muestra el saldo del movirubro al que pertenece, para que el usuario sepa de cuál rubro viene y evite exceder saldos
 74. **Validación de saldo al facturar**: antes de grabar/emitir factura, se valida que el total `valor_con_iva` por movirubro no exceda el saldo disponible. Considera facturas existentes (borrador + emitida) del mismo rubro. Evita llegar al pago con conflicto de saldo
 75. **DUP solo en tabla de rubros, no en productos**: el badge DUP se muestra en la tabla de rubros (facturar) para identificar filas duplicadas. En las tablas de productos NO se muestra DUP — el saldo es suficiente para diferenciar
+76. **Campo `nota_credito` y `nota_credito_valor` en facturas**: campos opcionales (nullable) en tabla `facturas` para registrar notas de crédito asociadas. Migración `2026_09_01_000001_add_nota_credito_to_facturas_table`. Implementado en los 3 componentes de facturación: `facturacion.blade.php` (crear/editar), `facturar.blade.php` (crear/editar), `factura-editar.blade.php` (editar). Campos en sección "Datos de la Factura" junto a Dependencia. No altera cálculos existentes (retenciones, totales, saldos)

@@ -137,10 +137,10 @@ new class extends Component
 
         foreach ($facturas as $factura) {
             $agrupadas = $factura->lineas->groupBy(function ($linea) {
-                return $linea->producto->uso->nombre_uso ?? 'Sin uso';
+                return $linea->itemcontrato->movirubro_id ?? 'sin_movirubro';
             });
 
-            foreach ($agrupadas as $nombreUso => $lineas) {
+            foreach ($agrupadas as $movirubroId => $lineas) {
                 $totalSinRetenciones = $lineas->sum(function ($linea) {
                     return $linea->valor_con_iva;
                 });
@@ -151,7 +151,7 @@ new class extends Component
                     'factura_id' => $factura->id,
                     'numero' => explode('-', $factura->numero)[1] ?? $factura->numero,
                     'fecha' => $factura->fecha->format('d/m/Y'),
-                    'uso' => $nombreUso,
+                    'rubro' => $primeraLinea->itemcontrato->rubro->codigo_rubro ?? '-',
                     'valor' => $totalSinRetenciones,
                     'movirubro_id' => $primeraLinea->itemcontrato->movirubro_id ?? null,
                     'uso_id' => $primeraLinea->producto->uso_id ?? null,
@@ -178,14 +178,14 @@ new class extends Component
     {
         return collect($this->lineasAgregadas)
             ->groupBy(function ($item) {
-                return $item['factura_id'] . '|' . $item['uso'];
+                return $item['factura_id'] . '|' . $item['movirubro_id'];
             })
             ->map(function ($lineas) {
                 return [
                     'factura_id' => $lineas->first()['factura_id'],
                     'numero' => $lineas->first()['numero'],
                     'fecha' => $lineas->first()['fecha'],
-                    'uso' => $lineas->first()['uso'],
+                    'rubro' => $lineas->first()['rubro'],
                     'total' => $lineas->sum('valor'),
                     'movirubro_id' => $lineas->first()['movirubro_id'],
                     'uso_id' => $lineas->first()['uso_id'],
@@ -560,7 +560,7 @@ new class extends Component
                                 <tr>
                                     <th class="px-4 py-3 text-left">N° Factura</th>
                                     <th class="px-4 py-3 text-left">Fecha</th>
-                                    <th class="px-4 py-3 text-left">Uso</th>
+                                    <th class="px-4 py-3 text-left">Rubro</th>
                                     <th class="px-4 py-3 text-right">Valor</th>
                                     @if ($pago_estado !== 'cerrado')
                                         <th class="px-4 py-3 text-right">Acciones</th>
@@ -572,7 +572,7 @@ new class extends Component
                                     <tr>
                                         <td class="px-4 py-3 font-medium text-gray-800 dark:text-gray-100">{{ $linea['numero'] }}</td>
                                         <td class="px-4 py-3 text-gray-600 dark:text-gray-300">{{ $linea['fecha'] }}</td>
-                                        <td class="px-4 py-3 text-gray-600 dark:text-gray-300">{{ $linea['uso'] }}</td>
+                                        <td class="px-4 py-3 text-gray-600 dark:text-gray-300">{{ $linea['rubro'] }}</td>
                                         <td class="px-4 py-3 text-right font-semibold text-gray-800 dark:text-gray-100">${{ number_format($linea['valor'], 2, ',', '.') }}</td>
                                         @if ($pago_estado !== 'cerrado')
                                             <td class="px-4 py-3 text-right">

@@ -26,6 +26,10 @@ new class extends Component
     public string $estampilla_default_id = '';
     public ?int $dependencia_id = null;
 
+    // Nota de crédito (opcional)
+    public string $nota_credito = '';
+    public ?float $nota_credito_valor = null;
+
     // Selección actual (antes de agregar)
     public ?int $producto_id = null;
     public int $cantidad = 1;
@@ -564,6 +568,8 @@ new class extends Component
                 'fecha_migo'    => $this->fecha_migo ?: null,
                 'municipio_id'  => $this->municipio_default_id,
                 'dependencia_id' => $this->dependencia_id,
+                'nota_credito'       => $this->nota_credito ?: null,
+                'nota_credito_valor' => $this->nota_credito_valor,
             ]);
 
         } else {
@@ -586,6 +592,8 @@ new class extends Component
                 'fecha'          => $this->fecha_factura,
                 'municipio_id'   => $this->municipio_default_id,
                 'dependencia_id' => $this->dependencia_id,
+                'nota_credito'       => $this->nota_credito ?: null,
+                'nota_credito_valor' => $this->nota_credito_valor,
                 'estado'         => 'borrador',
             ]);
 
@@ -685,6 +693,8 @@ new class extends Component
         $this->fecha_migo = $factura->fecha_migo ? $factura->fecha_migo->format('Y-m-d') : '';
         $this->municipio_default_id = $factura->municipio_id;
         $this->dependencia_id = $factura->dependencia_id;
+        $this->nota_credito = $factura->nota_credito ?? '';
+        $this->nota_credito_valor = $factura->nota_credito_valor;
         $this->estadoFactura = $factura->estado;
 
         // Cargar estampilla de la primera línea
@@ -769,7 +779,7 @@ new class extends Component
 
     public function nuevaFactura(): void
     {
-        $this->reset(['factura_id', 'numero_factura', 'fecha_factura', 'numero_migo', 'fecha_migo', 'municipio_default_id', 'estampilla_default_id', 'dependencia_id', 'lineas', 'retencionesPorLinea', 'pendientesPorLinea', 'estadoFactura', 'esAjuste', 'valorAjuste', 'porcentajeIvaAjuste']);
+        $this->reset(['factura_id', 'numero_factura', 'fecha_factura', 'numero_migo', 'fecha_migo', 'municipio_default_id', 'estampilla_default_id', 'dependencia_id', 'nota_credito', 'nota_credito_valor', 'lineas', 'retencionesPorLinea', 'pendientesPorLinea', 'estadoFactura', 'esAjuste', 'valorAjuste', 'porcentajeIvaAjuste']);
         $this->estadoFactura = 'borrador';
 
         if ($this->contrato) {
@@ -978,6 +988,16 @@ new class extends Component
                                 <option value="{{ $dep->id }}">{{ $dep->name }}</option>
                             @endforeach
                         </select>
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 items-end mt-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">N° Nota Crédito</label>
+                        <input type="text" wire:model="nota_credito" class="form-input w-full" placeholder="Opcional" />
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Valor Nota Crédito</label>
+                        <input type="number" wire:model="nota_credito_valor" min="0" step="0.01" class="form-input w-full" placeholder="0.00" />
                     </div>
                 </div>
             </div>

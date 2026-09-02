@@ -31,6 +31,10 @@ new class extends Component
     public string $estampilla_default_id = '';
     public ?int $dependencia_id = null;
 
+    // Nota de crédito (opcional)
+    public string $nota_credito = '';
+    public ?float $nota_credito_valor = null;
+
     // Paso 3: Líneas
     public array $lineas = [];
     public array $retencionesPorLinea = [];
@@ -92,6 +96,8 @@ new class extends Component
         $this->fecha_migo = $factura->fecha_migo ? $factura->fecha_migo->format('Y-m-d') : '';
         $this->municipio_default_id = $factura->municipio_id;
         $this->dependencia_id = $factura->dependencia_id;
+        $this->nota_credito = $factura->nota_credito ?? '';
+        $this->nota_credito_valor = $factura->nota_credito_valor;
 
         $primeraLinea = $factura->lineas->first();
         $this->estampilla_default_id = $primeraLinea && $primeraLinea->estampilla_retencion_id
@@ -374,6 +380,8 @@ new class extends Component
             'fecha' => $this->fecha_factura,
             'municipio_id' => $this->municipio_default_id,
             'dependencia_id' => $this->dependencia_id,
+            'nota_credito' => $this->nota_credito ?: null,
+            'nota_credito_valor' => $this->nota_credito_valor,
             'estado' => 'borrador',
         ]);
 
@@ -574,6 +582,8 @@ new class extends Component
             'dependencia_id' => $this->dependencia_id,
             'numero_migo' => $this->numero_migo ?: null,
             'fecha_migo' => $this->fecha_migo ?: null,
+            'nota_credito' => $this->nota_credito ?: null,
+            'nota_credito_valor' => $this->nota_credito_valor,
             'subtotal' => $totales['subtotal'],
             'total_iva' => $totales['total_iva'],
             'total_retenciones' => $totales['total_retenciones'],
@@ -911,7 +921,7 @@ new class extends Component
 
     public function resetForm(): void
     {
-        $this->reset(['numcontrato', 'contrato', 'contratoError', 'factura_id', 'numero_factura', 'fecha_factura', 'numero_migo', 'fecha_migo', 'municipio_default_id', 'estampilla_default_id', 'dependencia_id', 'lineas', 'retencionesPorLinea', 'pendientesPorLinea', 'editando', 'estadoFactura', 'esAjuste', 'valorAjuste', 'porcentajeIvaAjuste']);
+        $this->reset(['numcontrato', 'contrato', 'contratoError', 'factura_id', 'numero_factura', 'fecha_factura', 'numero_migo', 'fecha_migo', 'municipio_default_id', 'estampilla_default_id', 'dependencia_id', 'nota_credito', 'nota_credito_valor', 'lineas', 'retencionesPorLinea', 'pendientesPorLinea', 'editando', 'estadoFactura', 'esAjuste', 'valorAjuste', 'porcentajeIvaAjuste']);
         $this->resetValidation();
     }
 };
@@ -1037,6 +1047,14 @@ new class extends Component
                                 <option value="{{ $dep->id }}">{{ $dep->name }}</option>
                             @endforeach
                         </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">N° Nota Crédito</label>
+                        <input type="text" wire:model="nota_credito" class="w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 focus:border-violet-500 focus:ring-violet-500" placeholder="Opcional" />
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Valor Nota Crédito</label>
+                        <input type="number" wire:model="nota_credito_valor" min="0" step="0.01" class="w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 focus:border-violet-500 focus:ring-violet-500" placeholder="0.00" />
                     </div>
                 </div>
             </div>

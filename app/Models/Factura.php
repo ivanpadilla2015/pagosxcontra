@@ -18,6 +18,8 @@ class Factura extends Model
         'estado',
         'municipio_id',
         'dependencia_id',
+        'nota_credito',
+        'nota_credito_valor',
         'subtotal',
         'total_iva',
         'total_retenciones',
@@ -31,6 +33,7 @@ class Factura extends Model
         'total_iva' => 'decimal:2',
         'total_retenciones' => 'decimal:2',
         'total' => 'decimal:2',
+        'nota_credito_valor' => 'decimal:2',
     ];
 
     public function proveedor(): BelongsTo
