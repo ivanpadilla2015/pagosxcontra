@@ -421,10 +421,10 @@ new class extends Component
     </div>
 
     @if (session('message'))
-        <div class="mb-4 rounded-sm border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{{ session('message') }}</div>
+        <div x-init="$el.scrollIntoView({behavior:'smooth', block:'center'})" class="mb-4 rounded-sm border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{{ session('message') }}</div>
     @endif
     @if (session('error'))
-        <div class="mb-4 rounded-sm border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{{ session('error') }}</div>
+        <div x-init="$el.scrollIntoView({behavior:'smooth', block:'center'})" class="mb-4 rounded-sm border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{{ session('error') }}</div>
     @endif
 
     @if ($pago && $contrato)

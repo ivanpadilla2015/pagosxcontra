@@ -74,6 +74,15 @@ new class extends Component
         $this->confirmModalOpen = true;
     }
 
+    public function confirmDevolverBorrador(int $id): void
+    {
+        $factura = Factura::findOrFail($id);
+        $this->facturaToActionId = $factura->id;
+        $this->facturaToActionNumero = $factura->numero;
+        $this->actionType = 'devolver_borrador';
+        $this->confirmModalOpen = true;
+    }
+
     public function executeAction(): void
     {
         $factura = Factura::findOrFail($this->facturaToActionId);
@@ -101,6 +110,16 @@ new class extends Component
             }
             $factura->update(['estado' => 'anulada']);
             session()->flash('message', 'Factura pagada ' . $factura->numero . ' anulada. El pago debe revisarse manualmente.');
+        }
+
+        if ($this->actionType === 'devolver_borrador') {
+            if ($factura->estado !== 'emitida') {
+                session()->flash('error', 'Solo se pueden devolver a borrador facturas en estado emitida.');
+                $this->closeConfirmModal();
+                return;
+            }
+            $factura->update(['estado' => 'borrador']);
+            session()->flash('message', 'Factura ' . $factura->numero . ' devuelta a borrador. Ahora puede editarla.');
         }
 
         $this->closeConfirmModal();
@@ -185,6 +204,9 @@ new class extends Component
                                 <a href="{{ route('facturas.pdf', $factura->id) }}" target="_blank" class="text-sky-500 hover:text-sky-600 mr-2" title="Descargar PDF">
                                     <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m.75 12 3 3m0 0 3-3m-3 3v-6m-1.5-9H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z"/></svg>
                                 </a>
+                                <button type="button" wire:click="confirmDevolverBorrador({{ $factura->id }})" class="text-amber-500 hover:text-amber-600 mr-2" title="Devolver a Borrador">
+                                    <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M9 15 3 9m0 0 6-6M3 9h12a6 6 0 0 1 0 12h-3"/></svg>
+                                </button>
                                 <span class="text-xs text-gray-400 dark:text-gray-500">Esperando pago</span>
                             @elseif ($factura->estado === 'pagada')
                                 <a href="{{ route('facturas.pdf', $factura->id) }}" target="_blank" class="text-sky-500 hover:text-sky-600 mr-2" title="Descargar PDF">
@@ -212,16 +234,30 @@ new class extends Component
     @if ($confirmModalOpen)
         <div class="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/60" wire:click="closeConfirmModal">
             <div class="w-full max-w-md bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6" wire:click.stop>
-                <div class="flex items-center justify-center w-12 h-12 mx-auto mb-4 rounded-full {{ $actionType === 'anular_pagada' ? 'bg-amber-100 dark:bg-amber-900/30' : 'bg-rose-100 dark:bg-rose-900/30' }}">
-                    <svg class="w-6 h-6 {{ $actionType === 'anular_pagada' ? 'text-amber-600 dark:text-amber-400' : 'text-rose-600 dark:text-rose-400' }}" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z"/>
-                    </svg>
+                <div class="flex items-center justify-center w-12 h-12 mx-auto mb-4 rounded-full {{ $actionType === 'devolver_borrador' ? 'bg-amber-100 dark:bg-amber-900/30' : ($actionType === 'anular_pagada' ? 'bg-amber-100 dark:bg-amber-900/30' : 'bg-rose-100 dark:bg-rose-900/30') }}">
+                    @if ($actionType === 'devolver_borrador')
+                        <svg class="w-6 h-6 text-amber-600 dark:text-amber-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M9 15 3 9m0 0 6-6M3 9h12a6 6 0 0 1 0 12h-3"/>
+                        </svg>
+                    @else
+                        <svg class="w-6 h-6 {{ $actionType === 'anular_pagada' ? 'text-amber-600 dark:text-amber-400' : 'text-rose-600 dark:text-rose-400' }}" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z"/>
+                        </svg>
+                    @endif
                 </div>
                 <h2 class="text-lg font-bold text-gray-800 dark:text-gray-100 mb-2 text-center">
-                    {{ $actionType === 'anular_pagada' ? 'Anular Factura Pagada' : 'Anular Factura' }}
+                    @if ($actionType === 'devolver_borrador')
+                        Devolver a Borrador
+                    @elseif ($actionType === 'anular_pagada')
+                        Anular Factura Pagada
+                    @else
+                        Anular Factura
+                    @endif
                 </h2>
                 <p class="text-sm text-gray-600 dark:text-gray-400 text-center mb-6">
-                    @if ($actionType === 'anular_pagada')
+                    @if ($actionType === 'devolver_borrador')
+                        ¿Estás seguro de devolver a borrador la factura <span class="font-semibold">{{ $facturaToActionNumero }}</span>? Podrá editarla nuevamente.
+                    @elseif ($actionType === 'anular_pagada')
                         ¿Estás seguro de anular la factura <span class="font-semibold">{{ $facturaToActionNumero }}</span>? El pago asociado deberá revisarse manualmente.
                     @else
                         ¿Estás seguro de anular la factura <span class="font-semibold">{{ $facturaToActionNumero }}</span>?
@@ -229,8 +265,14 @@ new class extends Component
                 </p>
                 <div class="flex justify-end space-x-3">
                     <button type="button" wire:click="closeConfirmModal" class="btn border border-gray-200 dark:border-gray-700/60 hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-600 dark:text-gray-300">Cancelar</button>
-                    <button type="button" wire:click="executeAction" class="btn {{ $actionType === 'anular_pagada' ? 'bg-amber-600 hover:bg-amber-700 text-white border border-amber-600' : 'bg-rose-600 hover:bg-rose-700 text-white border border-rose-600' }}">
-                        {{ $actionType === 'anular_pagada' ? 'Anular Pagada' : 'Anular' }}
+                    <button type="button" wire:click="executeAction" class="btn {{ $actionType === 'devolver_borrador' ? 'bg-amber-600 hover:bg-amber-700 text-white border border-amber-600' : ($actionType === 'anular_pagada' ? 'bg-amber-600 hover:bg-amber-700 text-white border border-amber-600' : 'bg-rose-600 hover:bg-rose-700 text-white border border-rose-600') }}">
+                        @if ($actionType === 'devolver_borrador')
+                            Devolver a Borrador
+                        @elseif ($actionType === 'anular_pagada')
+                            Anular Pagada
+                        @else
+                            Anular
+                        @endif
                     </button>
                 </div>
             </div>

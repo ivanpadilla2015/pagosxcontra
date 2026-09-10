@@ -7,12 +7,15 @@ use App\Models\Itemcontrato;
 use App\Models\Municipio;
 use App\Models\ReteicaTarifa;
 use App\Services\CalculadoraRetenciones;
+use App\Services\XmlFacturaReader;
 use Illuminate\Support\Facades\Auth;
 use Livewire\Attributes\Computed;
 use Livewire\Component;
+use Livewire\WithFileUploads;
 
 new class extends Component
 {
+    use WithFileUploads;
     public string $numcontrato = '';
     public ?Contrato $contrato = null;
     public string $contratoError = '';
@@ -56,6 +59,10 @@ new class extends Component
     public bool $guardando = false;
     public ?int $factura_id = null;
     public string $estadoFactura = 'borrador';
+
+    // Importar XML
+    public bool $mostrarModalXml = false;
+    public ?\Illuminate\Http\UploadedFile $xmlFile = null;
 
     public function mount(?int $id = null): void
     {
@@ -497,18 +504,19 @@ new class extends Component
             }
         }
 
-        // Validar saldo de rubros: sumar valor_con_iva de las líneas agrupadas por itemcontrato
-        $porItemcontrato = [];
+        // Validar saldo de rubros: sumar valor_con_iva de las líneas agrupadas por movirubro_id
+        $porMovirubro = [];
         foreach ($this->lineas as $linea) {
-            $itemcontratoId = $linea['itemcontrato_id'];
-            $porItemcontrato[$itemcontratoId] = ($porItemcontrato[$itemcontratoId] ?? 0) + ($linea['valor_con_iva'] ?? 0);
+            $itemcontrato = Itemcontrato::find($linea['itemcontrato_id']);
+            if (!$itemcontrato || !$itemcontrato->movirubro_id) continue;
+            $movId = $itemcontrato->movirubro_id;
+            $porMovirubro[$movId] = ($porMovirubro[$movId] ?? 0) + ($linea['valor_con_iva'] ?? 0);
         }
 
-        foreach ($porItemcontrato as $itemcontratoId => $totalLineas) {
-            $itemcontrato = Itemcontrato::with('movirubro')->find($itemcontratoId);
-            if (!$itemcontrato || !$itemcontrato->movirubro) continue;
+        foreach ($porMovirubro as $movirubroId => $totalLineas) {
+            $movirubro = \App\Models\Movirubro::with('rubro')->find($movirubroId);
+            if (!$movirubro) continue;
 
-            $movirubro = $itemcontrato->movirubro;
             $saldoDisponible = (float) $movirubro->saldo_rubro;
 
             // Descontar facturas existentes (borrador + emitida) que usen este mismo movirubro, excluyendo la factura actual si se está editando
@@ -789,6 +797,177 @@ new class extends Component
         }
     }
 
+    // ------------------------------------------------------------------
+    // Importar factura desde XML DIAN
+    // ------------------------------------------------------------------
+
+    public function importarXml(): void
+    {
+        if (!$this->contrato) {
+            $this->dispatch('alerta', tipo: 'error', mensaje: 'Primero debe buscar y cargar un contrato.');
+            return;
+        }
+
+        if (!$this->xmlFile) {
+            $this->dispatch('alerta', tipo: 'error', mensaje: 'Seleccione un archivo XML.');
+            return;
+        }
+
+        // Validar extensión
+        $extension = strtolower($this->xmlFile->getClientOriginalExtension());
+        if ($extension !== 'xml') {
+            $this->dispatch('alerta', tipo: 'error', mensaje: 'El archivo debe ser un XML válido.');
+            return;
+        }
+
+        // Leer contenido del archivo
+        $contenido = file_get_contents($this->xmlFile->getRealPath());
+        if ($contenido === false) {
+            $this->dispatch('alerta', tipo: 'error', mensaje: 'No se pudo leer el archivo XML.');
+            return;
+        }
+
+        // Parsear XML
+        try {
+            $reader = new XmlFacturaReader();
+            $datos = $reader->parse($contenido);
+        } catch (\Exception $e) {
+            $this->dispatch('alerta', tipo: 'error', mensaje: $e->getMessage());
+            return;
+        }
+
+        // Auto-llenar cabecera si el XML trae datos
+        if (!empty($datos['numero']) && empty($this->numero_factura)) {
+            // Extraer solo la parte numérica del número de factura
+            // El XML trae "001", "0001", etc.
+            $this->numero_factura = ltrim($datos['numero'], '0') ?: $datos['numero'];
+        }
+
+        if (!empty($datos['fecha']) && empty($this->fecha_factura)) {
+            $this->fecha_factura = $datos['fecha'];
+        }
+
+        // Normalizar nombre para comparación
+        $normalizar = fn(string $nombre) => strtolower(trim($nombre));
+
+        // Función de matching fuzzy: compara nombres de producto con tolerancia
+        $buscarMatch = function(array $lineasXml, $itemcontratos) use ($normalizar) {
+            $resultado = [];
+            foreach ($lineasXml as $lineaXml) {
+                $nombreXml = $normalizar($lineaXml['nombre']);
+                $match = null;
+
+                // 1) Coincidencia exacta
+                $match = $itemcontratos->first(
+                    fn($it) => $normalizar($it->producto->name) === $nombreXml
+                );
+
+                // 2) Contención mutua (el nombre del XML está contenido en el de BD o viceversa)
+                if (!$match) {
+                    $match = $itemcontratos->first(function($it) use ($nombreXml, $normalizar) {
+                        $nombreBd = $normalizar($it->producto->name);
+                        return str_contains($nombreBd, $nombreXml) || str_contains($nombreXml, $nombreBd);
+                    });
+                }
+
+                // 3) Matching por tokens: todas las palabras significativas (3+ chars) del más corto aparecen en el más largo
+                if (!$match) {
+                    $tokensXml = array_filter(explode(' ', $nombreXml), fn($t) => strlen($t) >= 3);
+                    if (count($tokensXml) >= 2) {
+                        $match = $itemcontratos->first(function($it) use ($tokensXml, $normalizar) {
+                            $nombreBd = $normalizar($it->producto->name);
+                            foreach ($tokensXml as $token) {
+                                if (!str_contains($nombreBd, $token)) return false;
+                            }
+                            return true;
+                        });
+                    }
+                }
+
+                $resultado[] = ['linea' => $lineaXml, 'match' => $match];
+            }
+            return $resultado;
+        };
+
+        // Buscar matches y contar resultados
+        $lineasImportadas = 0;
+        $lineasPendientes = [];
+        $totalXml = 0;
+        $totalContrato = 0;
+
+        $matches = $buscarMatch($datos['lineas'], $this->contrato->itemcontratos);
+
+        foreach ($matches as ['linea' => $lineaXml, 'match' => $itemMatch]) {
+
+            if ($itemMatch) {
+                $cantidad = max(1, (int) $lineaXml['cantidad']);
+
+                $this->lineas[] = [
+                    'itemcontrato_id'         => $itemMatch->id,
+                    'producto_nombre'         => $itemMatch->producto->name ?? '—',
+                    'tipo_adquisicion'        => $itemMatch->producto->tipo ?? 'bien',
+                    'valor_costo_unit'        => $itemMatch->valor_costo,
+                    'iva_unit'                => $itemMatch->iva,
+                    'valor_iva_unit'          => $itemMatch->valor_iva,
+                    'valor_con_iva_unit'      => $itemMatch->valor_con_iva,
+                    'unidad'                  => $itemMatch->unidad,
+                    'rubro'                   => $itemMatch->rubro->nombre_rubro ?? '—',
+                    'uso'                     => $itemMatch->producto->uso->nombre_uso ?? '—',
+                    'cantidad'                => $cantidad,
+                    'municipio_id'            => null,
+                    'municipio_nombre'        => '',
+                    'estampilla_retencion_id' => null,
+                    'estampilla_nombre'       => '',
+                    'valor_base'              => $itemMatch->valor_costo * $cantidad,
+                    'valor_iva'               => $itemMatch->valor_iva * $cantidad,
+                    'valor_con_iva'           => $itemMatch->valor_con_iva * $cantidad,
+                ];
+
+                $idx = count($this->lineas) - 1;
+                $this->calcularRetencionesLinea($idx);
+
+                // Acumular para validación de discrepancia
+                $totalXml      += $lineaXml['valor_unitario'] * $cantidad;
+                $totalContrato += $itemMatch->valor_costo * $cantidad;
+
+                $lineasImportadas++;
+            } else {
+                $lineasPendientes[] = $lineaXml['nombre'];
+            }
+        }
+
+        // Cerrar modal
+        $this->mostrarModalXml = false;
+        $this->xmlFile = null;
+
+        if ($lineasImportadas === 0 && empty($lineasPendientes)) {
+            $this->dispatch('alerta', tipo: 'error', mensaje: 'El XML no contiene líneas válidas.');
+            return;
+        }
+
+        // Construir mensaje de resultado
+        $mensaje = "Importadas: {$lineasImportadas} línea(s).";
+
+        if (!empty($lineasPendientes)) {
+            $pendientesStr = implode(', ', array_slice($lineasPendientes, 0, 5));
+            if (count($lineasPendientes) > 5) {
+                $pendientesStr .= ' y ' . (count($lineasPendientes) - 5) . ' más';
+            }
+            $mensaje .= " Sin match: {$pendientesStr}. Agregue estas líneas manualmente si son necesarias.";
+        }
+
+        // Validar discrepancia de valores
+        $diferencia = abs($totalXml - $totalContrato);
+        if ($diferencia > 0.01 && $totalXml > 0 && $totalContrato > 0) {
+            $mensaje .= " ⚠ ATENCIÓN: Total del XML ($" . number_format($totalXml, 2, ',', '.') .
+                         ") difiere del contrato ($" . number_format($totalContrato, 2, ',', '.') .
+                         "). Diferencia: $" . number_format($diferencia, 2, ',', '.') . ".";
+            $this->dispatch('alerta', tipo: 'warning', mensaje: $mensaje);
+        } else {
+            $this->dispatch('alerta', tipo: 'success', mensaje: $mensaje);
+        }
+    }
+
     public function render()
     {
         return view('components.contratos.facturar');
@@ -947,6 +1126,15 @@ new class extends Component
                         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">N° Factura</label>
                         <input type="text" wire:model="numero_factura" class="form-input w-full" placeholder="Ej: 001" />
                         <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">Código interno: {{ $contrato->proveedor_id ?? '?' }}-{{ $numero_factura ?: '001' }}-{{ $fecha_factura ? date('Y', strtotime($fecha_factura)) : date('Y') }}</p>
+                        @if ($contrato)
+                            <button type="button" wire:click="$set('mostrarModalXml', true)"
+                                    class="mt-2 inline-flex items-center gap-1.5 text-xs font-medium text-violet-600 hover:text-violet-800 dark:text-violet-400 dark:hover:text-violet-300 transition">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
+                                </svg>
+                                Importar desde XML
+                            </button>
+                        @endif
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Fecha</label>
@@ -1330,6 +1518,54 @@ new class extends Component
                     @endif
                 </div>
             @endif
+        </div>
+    @endif
+
+    {{-- Modal Importar XML --}}
+    @if ($mostrarModalXml)
+        <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" wire:click="$set('mostrarModalXml', false)">
+            <div class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-6 w-full max-w-md mx-4" wire:click.stop>
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-semibold text-gray-800 dark:text-gray-100">Importar Factura XML</h3>
+                    <button type="button" wire:click="$set('mostrarModalXml', false)" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                    </button>
+                </div>
+
+                <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                    Seleccione el archivo XML de facturación electrónica DIAN. Los productos se compararán por nombre con los productos del contrato.
+                </p>
+
+                {{-- Zona de selección de archivo --}}
+                <div class="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-8 text-center hover:border-violet-400 dark:hover:border-violet-500 transition">
+                    <input type="file" accept=".xml" wire:model="xmlFile" class="hidden" id="xmlInput" />
+                    <label for="xmlInput" class="cursor-pointer">
+                        <svg class="w-10 h-10 mx-auto text-gray-400 dark:text-gray-500 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+                        </svg>
+                        <p class="text-sm text-gray-600 dark:text-gray-300">Seleccione o arrastre el archivo XML</p>
+                        <p class="text-xs text-gray-400 dark:text-gray-500 mt-1">Solo archivos .xml de facturación electrónica</p>
+                    </label>
+                </div>
+
+                {{-- Nombre del archivo seleccionado --}}
+                @if ($xmlFile)
+                    <div class="mt-4 flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300 bg-green-50 dark:bg-green-900/20 rounded-lg px-3 py-2">
+                        <svg class="w-5 h-5 text-green-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                        <span class="truncate">{{ $xmlFile->getClientOriginalName() }}</span>
+                    </div>
+                @endif
+
+                {{-- Botones --}}
+                <div class="mt-6 flex gap-3">
+                    <button type="button" wire:click="$set('mostrarModalXml', false)" class="flex-1 px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition text-sm font-medium">
+                        Cancelar
+                    </button>
+                    <button type="button" wire:click="importarXml" {{ !$xmlFile ? 'disabled' : '' }} class="flex-1 px-4 py-2.5 bg-violet-600 hover:bg-violet-700 text-white rounded-lg transition text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed">
+                        Importar
+                    </button>
+                </div>
+            </div>
         </div>
     @endif
 </div>

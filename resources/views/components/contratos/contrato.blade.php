@@ -361,8 +361,12 @@ new class extends Component
 
     {{-- Modal de crear/editar --}}
     @if ($modalOpen)
-        <div class="fixed inset-0 z-50 flex items-start justify-center bg-gray-900/60 overflow-y-auto py-8" wire:click="closeModal" wire:key="contrato-modal">
-            <div class="w-full max-w-3xl bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6" wire:click.stop>
+        <div class="fixed inset-0 z-50 overflow-y-auto" wire:key="contrato-modal">
+            {{-- Backdrop --}}
+            <div class="fixed inset-0 bg-gray-900/60"></div>
+            {{-- Contenido --}}
+            <div class="relative flex min-h-full items-start justify-center py-8 px-4">
+            <div class="w-full max-w-3xl bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
                 <h2 class="text-lg font-bold text-gray-800 dark:text-gray-100 mb-1">{{ $editingId ? 'Editar Contrato' : 'Nuevo Contrato' }}</h2>
                 <p class="text-xs text-gray-500 dark:text-gray-400 mb-4">Los campos marcados con <span class="text-rose-500">*</span> son obligatorios.</p>
 
@@ -501,13 +505,16 @@ new class extends Component
                     <button type="button" wire:click="save" class="btn bg-white hover:bg-gray-100 text-gray-800 border border-gray-200">Guardar</button>
                 </div>
             </div>
+            </div>
         </div>
     @endif
 
     {{-- Modal de confirmación de eliminación --}}
     @if ($deleteModalOpen)
-        <div class="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/60" wire:click="closeDeleteModal" wire:key="delete-modal">
-            <div class="w-full max-w-md bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6" wire:click.stop>
+        <div class="fixed inset-0 z-50 overflow-y-auto" wire:key="delete-modal">
+            <div class="fixed inset-0 bg-gray-900/60"></div>
+            <div class="relative flex min-h-full items-center justify-center px-4">
+            <div class="w-full max-w-md bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
                 <div class="flex items-center justify-center w-12 h-12 mx-auto mb-4 rounded-full bg-rose-100 dark:bg-rose-900/30">
                     <svg class="w-6 h-6 text-rose-600 dark:text-rose-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z"/>
@@ -519,6 +526,7 @@ new class extends Component
                     <button type="button" wire:click="closeDeleteModal" class="btn border border-gray-200 dark:border-gray-700/60 hover:bg-gray-50 dark:hover:bg-gray-700/50 text-gray-600 dark:text-gray-300">Cancelar</button>
                     <button type="button" wire:click="delete" class="btn bg-rose-600 hover:bg-rose-700 text-white border border-rose-600">Eliminar</button>
                 </div>
+            </div>
             </div>
         </div>
     @endif
