@@ -17,7 +17,7 @@
       <tbody class="coluyy2">
          <tr >
               <td class="coluyy2" colspan="5" style="text-align: left;"><strong>No. DE CONTRATO: </strong>{{ "  ".$act->contrato->numcontrato}} </td>
-              <td class="coluyy2" colspan="5" style="text-align: left;"><strong>FECHA DEL CONTRATO:</strong>{{ "  ".$act->contrato->fechacontrato->format('d/m/Y')}} </td>
+               <td class="coluyy2" colspan="5" style="text-align: left;"><strong>FECHA DEL CONTRATO:</strong>{{ "  ".($act->contrato->fechacontrato ? $act->contrato->fechacontrato->format('d/m/Y') : '—')}}</td>
          </tr>
          <tr >
           <td class="coluyy2" colspan="3" style="text-align: left;"><strong>OBJETO CONTRATO: </strong> </td>
@@ -45,7 +45,7 @@
          </tr>
          <tr class="">
           <td class="coluyy2" colspan="3" style="text-align: left;"><strong>FECHA ACTA DE COORDINACIÓN O DE INICIO:</strong> </td>
-          <td class="coluyy2" colspan="7" style="text-align: left;">{{ " ".$act->contrato->fecha_inicio_contrato->format('d/m/Y') }} </td>
+           <td class="coluyy2" colspan="7" style="text-align: left;">{{ " ".($act->contrato->fecha_inicio_contrato ? $act->contrato->fecha_inicio_contrato->format('d/m/Y') : '—') }} </td>
          </tr>
           <tr class="">
           <td class="coluyy2" colspan="3" style="text-align: left;"><strong>PLAZO DE EJECUCIÓN:</strong> </td>
@@ -53,7 +53,7 @@
          </tr>
           <tr class="">
           <td class="coluyy2" colspan="3" style="text-align: left;"><strong>FECHA DE TERMINACIÓN CONTRACTUAL:</strong> </td>
-          <td class="coluyy2" colspan="7" style="text-align: left;">{{ " ".$ultreg->newplazoejecucion->format('d/m/Y') }} </td>
+           <td class="coluyy2" colspan="7" style="text-align: left;">{{ " ".($ultreg->newplazoejecucion ? $ultreg->newplazoejecucion->format('d/m/Y') : '—') }} </td>
          </tr>
          <tr >
           <td class="colacta" colspan="10" style="text-align: center;">DATOS DE LA ENTREGA PARCIAL O TOTAL DEL BIEN O SERVICIO </td>
@@ -62,7 +62,7 @@
           <td class="coluyy2" colspan="10" style="text-align: center;">TRATA DE LA ENTREGA(parcial/ total) QUE HACE EL CONTRATISTA A LA AGENCIA LOGISTICA DE LAS FUERZAS MILITARES </td>
          </tr>
          <tr >
-          <td class="coluyy2" colspan="2" style="text-align: left;">FECHA: {{ $act->factura->fecha_migo->format('d/m/Y') }}</td>
+           <td class="coluyy2" colspan="2" style="text-align: left;">FECHA: {{ $act->factura->fecha_migo ? $act->factura->fecha_migo->format('d/m/Y') : ($act->factura->fecha ? $act->factura->fecha->format('d/m/Y') : '—') }}</td>
           <td class="coluyy2" colspan="2" style="text-align: left;">HORA: {{ $act->hora}}  </td>
           <td class="coluyy2" colspan="3" style="text-align: left;">{{'ENTREGA PARCIAL:'}} &nbsp;{{'SI'}}&nbsp;x&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;No&nbsp; </td>
           <td class="coluyy2" colspan="3" style="text-align: left;">ENTREGA TOTAL:&nbsp;&nbsp;&nbsp;&nbsp;NO </td>

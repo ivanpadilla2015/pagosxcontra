@@ -18,23 +18,31 @@ class CalculadoraRetenciones
      * @param FacturaLinea $linea
      * @return array<int, array{retencion: Retencion, porcentaje: float, base_calculo: string, valor_retenido: float}>
      */
-    public function calcular(FacturaLinea $linea): array
+    public function calcular(FacturaLinea $linea, ?\App\Models\Proveedor $proveedorExtern = null): array
     {
         $producto = $linea->producto;
         if (!$producto) {
             $producto = \App\Models\Producto::find($linea->producto_id);
         }
 
-        if ($linea->factura_id && $linea->factura) {
-            $proveedor = $linea->factura->proveedor;
-            if (!$proveedor) {
-                $proveedor = \App\Models\Proveedor::find($linea->factura->proveedor_id);
+        $proveedor = $proveedorExtern;
+
+        if (!$proveedor) {
+            if ($linea->factura_id && $linea->factura) {
+                $proveedor = $linea->factura->proveedor;
+                if (!$proveedor) {
+                    $proveedor = \App\Models\Proveedor::find($linea->factura->proveedor_id);
+                }
+                $proveedor->load('regimenTributario.retenciones');
+            } else {
+                // Línea temporal sin factura: resolver proveedor desde el itemcontrato
+                $item = $linea->itemcontrato_id ? \App\Models\Itemcontrato::with('contrato.proveedor.regimenTributario.retenciones')->find($linea->itemcontrato_id) : null;
+                $proveedor = $item?->contrato?->proveedor;
             }
+        }
+
+        if ($proveedor && !$proveedor->relationLoaded('regimenTributario.retenciones')) {
             $proveedor->load('regimenTributario.retenciones');
-        } else {
-            // Línea temporal sin factura: resolver proveedor desde el itemcontrato
-            $item = $linea->itemcontrato_id ? \App\Models\Itemcontrato::with('contrato.proveedor.regimenTributario.retenciones')->find($linea->itemcontrato_id) : null;
-            $proveedor = $item?->contrato?->proveedor;
         }
 
         if (!$proveedor) {
@@ -229,9 +237,9 @@ class CalculadoraRetenciones
     /**
      * Calcula y persiste las retenciones para una línea de factura.
      */
-    public function calcularYPersistir(FacturaLinea $linea): array
+    public function calcularYPersistir(FacturaLinea $linea, ?\App\Models\Proveedor $proveedorExtern = null): array
     {
-        $resultado = $this->calcular($linea);
+        $resultado = $this->calcular($linea, $proveedorExtern);
 
         // Eliminar retenciones anteriores de esta línea
         $linea->retenciones()->delete();

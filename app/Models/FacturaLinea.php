@@ -11,7 +11,9 @@ class FacturaLinea extends Model
     protected $fillable = [
         'factura_id',
         'itemcontrato_id',
+        'movirubro_id',
         'producto_id',
+        'uso_id',
         'tipo_adquisicion',
         'municipio_id',
         'valor_base',
@@ -40,6 +42,11 @@ class FacturaLinea extends Model
     public function itemcontrato(): BelongsTo
     {
         return $this->belongsTo(Itemcontrato::class);
+    }
+
+    public function movirubro(): BelongsTo
+    {
+        return $this->belongsTo(Movirubro::class);
     }
 
     public function producto(): BelongsTo

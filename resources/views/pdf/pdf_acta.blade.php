@@ -32,7 +32,7 @@
         </tr>
         <tr>
             <td colspan="5" class="fw-bold">FECHA DEL CONTRATO:</td>
-            <td colspan="5">{{ $acta->contrato->fechacontrato->format('d/m/Y') }}</td>
+            <td colspan="5">{{ $acta->contrato->fechacontrato ? $acta->contrato->fechacontrato->format('d/m/Y') : '—' }}</td>
         </tr>
         <tr>
             <td colspan="3" class="fw-bold">OBJETO CONTRATO:</td>
@@ -61,7 +61,7 @@
     <table>
         <tr>
             <td colspan="3" class="fw-bold">FECHA:</td>
-            <td colspan="2">{{ $acta->fecha->format('d/m/Y') }}</td>
+            <td colspan="2">{{ $acta->fecha ? $acta->fecha->format('d/m/Y') : '—' }}</td>
             <td colspan="2" class="fw-bold">HORA:</td>
             <td colspan="3">{{ $acta->hora }}</td>
         </tr>

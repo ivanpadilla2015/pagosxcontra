@@ -138,7 +138,7 @@ new class extends Component
             return;
         }
 
-        $this->contrato = Contrato::with(['proveedor', 'movirubros.rubro', 'itemcontratos.producto'])
+        $this->contrato = Contrato::with(['proveedor', 'movirubros.rubro', 'itemcontratos.producto', 'itemcontratos.movirubro', 'itemcontratos.rubro'])
             ->where('numcontrato', trim($this->numcontrato))
             ->first();
 
@@ -382,10 +382,15 @@ new class extends Component
 
         $linea = $this->lineas[$idx];
 
-        // Para ajustes: usar producto_id directamente (no hay itemcontrato real)
-        $productoId = $linea['es_ajuste'] ?? false
-            ? ($this->contrato->itemcontratos->firstWhere('producto_id', $linea['itemcontrato_id'] ?? null)?->producto_id ?? $linea['itemcontrato_id'] ?? null)
-            : Itemcontrato::find($linea['itemcontrato_id'])?->producto_id;
+        // Obtener producto_id según el tipo de línea
+        if ($linea['es_ajuste'] ?? false) {
+            $productoId = $this->contrato->itemcontratos->firstWhere('producto_id', $linea['itemcontrato_id'] ?? null)?->producto_id ?? $linea['itemcontrato_id'] ?? null;
+        } elseif (empty($linea['itemcontrato_id'])) {
+            // Línea sencilla (sin itemcontrato): usar producto_id del array
+            $productoId = $linea['producto_id'] ?? null;
+        } else {
+            $productoId = Itemcontrato::find($linea['itemcontrato_id'])?->producto_id;
+        }
 
         $facturaLinea = new FacturaLinea([
             'factura_id'              => 0,
@@ -459,6 +464,80 @@ new class extends Component
             'total_retenciones' => $totalRetenciones,
             'total'             => $subtotal + $totalIva - $totalRetenciones,
         ];
+    }
+
+    // ------------------------------------------------------------------
+    // Saldo por rubro (informativo + control)
+    // ------------------------------------------------------------------
+
+    public function getSaldoPorRubroProperty(): array
+    {
+        if (!$this->contrato || empty($this->lineas)) {
+            return [];
+        }
+
+        $mapaItem = $this->contrato->itemcontratos->keyBy('id');
+
+        $consumo = [];
+        foreach ($this->lineas as $linea) {
+            $item = $mapaItem->get($linea['itemcontrato_id']);
+            if (!$item || !$item->movirubro_id) continue;
+
+            $movId = $item->movirubro_id;
+            if (!isset($consumo[$movId])) {
+                $consumo[$movId] = 0;
+            }
+            $consumo[$movId] += $linea['valor_con_iva'] ?? 0;
+        }
+
+        if (empty($consumo)) return [];
+
+        // Una sola query: suma de valor_con_iva de facturas borrador/emitida agrupada por movirubro_id
+        $movIds = array_keys($consumo);
+        $queryExistentes = \App\Models\FacturaLinea::whereHas('factura', function ($q) {
+            $q->where('contrato_id', $this->contrato->id)
+              ->whereIn('estado', ['borrador', 'emitida']);
+            if ($this->factura_id) {
+                $q->where('id', '!=', $this->factura_id);
+            }
+        })->whereHas('itemcontrato', function ($q) use ($movIds) {
+            $q->whereIn('movirubro_id', $movIds);
+        });
+
+        $existentesPorMov = $queryExistentes
+            ->join('itemcontratos', 'factura_lineas.itemcontrato_id', '=', 'itemcontratos.id')
+            ->selectRaw('itemcontratos.movirubro_id, SUM(factura_lineas.valor_con_iva) as total')
+            ->groupBy('itemcontratos.movirubro_id')
+            ->pluck('total', 'itemcontratos.movirubro_id')
+            ->toArray();
+
+        $resultado = [];
+        foreach ($this->contrato->movirubros as $movirubro) {
+            $movId = $movirubro->id;
+            $consumoFactura = $consumo[$movId] ?? 0;
+            if ($consumoFactura <= 0) continue;
+
+            $saldoDisponible = (float) $movirubro->saldo_rubro;
+            $facturasExistentes = (float) ($existentesPorMov[$movId] ?? 0);
+            $restante = $saldoDisponible - $facturasExistentes - $consumoFactura;
+
+            $resultado[] = [
+                'movirubro_id'       => $movId,
+                'codigo_rubro'       => $movirubro->rubro->codigo_rubro ?? '—',
+                'nombre_rubro'       => $movirubro->rubro->nombre_rubro ?? '—',
+                'saldo_disponible'   => $saldoDisponible,
+                'otras_facturas'     => $facturasExistentes,
+                'consumo_factura'    => $consumoFactura,
+                'restante'           => $restante,
+            ];
+        }
+
+        return $resultado;
+    }
+
+    public function getHayExcesoSaldoProperty(): bool
+    {
+        return collect($this->saldoPorRubro)->contains(fn($r) => $r['restante'] < -0.01);
     }
 
     // ------------------------------------------------------------------
@@ -610,18 +689,16 @@ new class extends Component
 
         // Crear líneas
         foreach ($this->lineas as $idx => $linea) {
-            $itemcontrato = Itemcontrato::find($linea['itemcontrato_id']);
-            if (!$itemcontrato) continue;
-
-            $cantidad = max(1, (float) ($linea['cantidad'] ?? 1));
+            $itemcontrato = Itemcontrato::find($linea['itemcontrato_id'] ?? null);
             $esAjuste = $linea['es_ajuste'] ?? false;
+            $sinItemcontrato = empty($linea['itemcontrato_id']);
 
             if ($esAjuste) {
                 // Línea de ajuste: usar valores personalizados
                 $facturaLinea = FacturaLinea::create([
                     'factura_id'              => $factura->id,
-                    'itemcontrato_id'         => $itemcontrato->id,
-                    'producto_id'             => $itemcontrato->producto_id,
+                    'itemcontrato_id'         => $itemcontrato?->id,
+                    'producto_id'             => $linea['producto_id'] ?? $itemcontrato?->producto_id,
                     'tipo_adquisicion'        => $linea['tipo_adquisicion'] ?? 'bien',
                     'municipio_id'            => $linea['municipio_id'] ?? null,
                     'estampilla_retencion_id' => !empty($linea['estampilla_retencion_id']) ? (int) $linea['estampilla_retencion_id'] : null,
@@ -632,20 +709,36 @@ new class extends Component
                     'es_ajuste'               => true,
                     'porcentaje_iva'          => $linea['porcentaje_iva'] ?? null,
                 ]);
+            } elseif ($sinItemcontrato) {
+                // Línea sencilla (sin itemcontrato): usar valores de la línea
+                $facturaLinea = FacturaLinea::create([
+                    'factura_id'              => $factura->id,
+                    'itemcontrato_id'         => null,
+                    'producto_id'             => $linea['producto_id'] ?? null,
+                    'tipo_adquisicion'        => $linea['tipo_adquisicion'] ?? 'bien',
+                    'municipio_id'            => $linea['municipio_id'] ?? null,
+                    'estampilla_retencion_id' => !empty($linea['estampilla_retencion_id']) ? (int) $linea['estampilla_retencion_id'] : null,
+                    'valor_base'              => $linea['valor_base'],
+                    'valor_iva'               => $linea['valor_iva'],
+                    'valor_con_iva'           => $linea['valor_con_iva'],
+                    'cantidad'                => max(1, (float) ($linea['cantidad'] ?? 1)),
+                ]);
             } else {
                 // Línea normal: valores del itemcontrato
-        $facturaLinea = FacturaLinea::create([
-        'factura_id'              => $factura->id,
-        'itemcontrato_id'         => $itemcontrato->id,
-        'producto_id'             => $itemcontrato->producto_id,
-        'tipo_adquisicion'        => $linea['tipo_adquisicion'] ?? 'bien',
-        'municipio_id'            => $linea['municipio_id'] ?? null,
-        'estampilla_retencion_id' => !empty($linea['estampilla_retencion_id']) ? (int) $linea['estampilla_retencion_id'] : null,
-        'valor_base'              => $itemcontrato->valor_costo * $cantidad,
-        'valor_iva'               => $itemcontrato->valor_iva * $cantidad,
-        'valor_con_iva'           => $itemcontrato->valor_con_iva * $cantidad,
-        'cantidad'                => $cantidad,
-    ]);
+                if (!$itemcontrato) continue;
+                $cantidad = max(1, (float) ($linea['cantidad'] ?? 1));
+                $facturaLinea = FacturaLinea::create([
+                    'factura_id'              => $factura->id,
+                    'itemcontrato_id'         => $itemcontrato->id,
+                    'producto_id'             => $itemcontrato->producto_id,
+                    'tipo_adquisicion'        => $linea['tipo_adquisicion'] ?? 'bien',
+                    'municipio_id'            => $linea['municipio_id'] ?? null,
+                    'estampilla_retencion_id' => !empty($linea['estampilla_retencion_id']) ? (int) $linea['estampilla_retencion_id'] : null,
+                    'valor_base'              => $itemcontrato->valor_costo * $cantidad,
+                    'valor_iva'               => $itemcontrato->valor_iva * $cantidad,
+                    'valor_con_iva'           => $itemcontrato->valor_con_iva * $cantidad,
+                    'cantidad'                => $cantidad,
+                ]);
             }
 
             $resultado = $servicio->calcularYPersistir($facturaLinea);
@@ -678,7 +771,7 @@ new class extends Component
 
     public function cargarFactura(int $facturaId): void
     {
-        $factura = Factura::with(['lineas.retenciones', 'contrato.proveedor', 'contrato.movirubros.rubro', 'contrato.itemcontratos.producto'])->find($facturaId);
+        $factura = Factura::with(['lineas.retenciones', 'lineas.producto', 'contrato.proveedor', 'contrato.movirubros.rubro', 'contrato.itemcontratos.producto', 'contrato.itemcontratos.movirubro', 'contrato.itemcontratos.rubro'])->find($facturaId);
 
         if (!$factura) {
             $this->dispatch('alerta', tipo: 'error', mensaje: 'Factura no encontrada.');
@@ -719,20 +812,23 @@ new class extends Component
         foreach ($factura->lineas as $idx => $fl) {
             $item = $fl->itemcontrato;
             $esAjuste = $fl->es_ajuste ?? false;
+            $sinItemcontrato = empty($fl->itemcontrato_id);
 
-            if ($esAjuste) {
-                // Línea de ajuste: usar valores guardados (no del itemcontrato)
+            if ($esAjuste || $sinItemcontrato) {
+                // Línea de ajuste o sencilla (sin itemcontrato): usar valores guardados
+                $productoNombre = $item->producto->name ?? ($fl->producto->name ?? '—');
                 $this->lineas[] = [
                     'itemcontrato_id'         => $fl->itemcontrato_id,
-                    'producto_nombre'         => $item->producto->name ?? '—',
+                    'producto_id'             => $fl->producto_id,
+                    'producto_nombre'         => $productoNombre,
                     'tipo_adquisicion'        => $fl->tipo_adquisicion ?? 'bien',
                     'valor_costo_unit'        => $fl->valor_base,
                     'iva_unit'                => $fl->porcentaje_iva ?? 0,
                     'valor_iva_unit'          => $fl->valor_iva,
                     'valor_con_iva_unit'      => $fl->valor_con_iva,
-                    'unidad'                  => $item->unidad,
+                    'unidad'                  => $item->unidad ?? ($fl->producto->tipo ?? ''),
                     'rubro'                   => $item->rubro->nombre_rubro ?? '—',
-                    'uso'                     => $item->producto->uso->nombre_uso ?? '—',
+                    'uso'                     => $item->producto->uso->nombre_uso ?? ($fl->producto->uso->nombre_uso ?? '—'),
                     'cantidad'                => $fl->cantidad,
                     'municipio_id'            => $fl->municipio_id,
                     'municipio_nombre'        => $this->obtenerNombreMunicipio($fl->municipio_id),
@@ -741,7 +837,7 @@ new class extends Component
                     'valor_base'              => $fl->valor_base,
                     'valor_iva'               => $fl->valor_iva,
                     'valor_con_iva'           => $fl->valor_con_iva,
-                    'es_ajuste'               => true,
+                    'es_ajuste'               => $esAjuste,
                     'porcentaje_iva'          => $fl->porcentaje_iva,
                 ];
             } else {
@@ -926,9 +1022,9 @@ new class extends Component
                 $idx = count($this->lineas) - 1;
                 $this->calcularRetencionesLinea($idx);
 
-                // Acumular para validación de discrepancia
-                $totalXml      += $lineaXml['valor_unitario'] * $cantidad;
-                $totalContrato += $itemMatch->valor_costo * $cantidad;
+                // Acumular para validación de discrepancia (valores con IVA)
+                $totalXml      += $lineaXml['valor_unitario'] * $cantidad * (1 + $lineaXml['porcentaje_iva'] / 100);
+                $totalContrato += $itemMatch->valor_con_iva * $cantidad;
 
                 $lineasImportadas++;
             } else {
@@ -1475,6 +1571,77 @@ new class extends Component
                     </div>
                 </div>
 
+                {{-- Consumo por Rubro --}}
+                @if (count($this->saldoPorRubro) > 0)
+                    <div class="bg-white dark:bg-gray-800 shadow-md rounded-lg overflow-hidden mb-6">
+                        <div class="p-6 pb-0">
+                            <h3 class="text-lg font-semibold text-gray-700 dark:text-gray-200">Consumo por Rubro</h3>
+                            <p class="text-xs text-gray-500 dark:text-gray-400 mb-3">Saldo que consume esta factura por cada rubro (incluye otras facturas del mismo rubro)</p>
+                        </div>
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-sm">
+                                <thead>
+                                    <tr class="border-b border-gray-200 dark:border-gray-700">
+                                        <th class="text-left px-6 py-3 font-medium text-gray-500 dark:text-gray-400">Rubro</th>
+                                        <th class="text-right px-6 py-3 font-medium text-gray-500 dark:text-gray-400">Saldo Disp.</th>
+                                        <th class="text-right px-6 py-3 font-medium text-gray-500 dark:text-gray-400">Otras Facturas</th>
+                                        <th class="text-right px-6 py-3 font-medium text-gray-500 dark:text-gray-400">Esta Factura</th>
+                                        <th class="text-right px-6 py-3 font-medium text-gray-500 dark:text-gray-400">Restante</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach ($this->saldoPorRubro as $item)
+                                        @php
+                                            $esNegativo = $item['restante'] < -0.01;
+                                            $esBajo = !$esNegativo && $item['saldo_disponible'] > 0 && $item['restante'] < ($item['saldo_disponible'] * 0.25);
+                                        @endphp
+                                        <tr class="border-b border-gray-100 dark:border-gray-700/50">
+                                            <td class="px-6 py-3 font-medium text-gray-800 dark:text-gray-100">
+                                                {{ $item['codigo_rubro'] }} - {{ $item['nombre_rubro'] }}
+                                            </td>
+                                            <td class="px-6 py-3 text-right text-gray-600 dark:text-gray-300">
+                                                $ {{ number_format($item['saldo_disponible'], 2, ',', '.') }}
+                                            </td>
+                                            <td class="px-6 py-3 text-right text-gray-600 dark:text-gray-300">
+                                                @if ($item['otras_facturas'] > 0)
+                                                    - $ {{ number_format($item['otras_facturas'], 2, ',', '.') }}
+                                                @else
+                                                    —
+                                                @endif
+                                            </td>
+                                            <td class="px-6 py-3 text-right font-bold text-blue-700 dark:text-blue-300">
+                                                $ {{ number_format($item['consumo_factura'], 2, ',', '.') }}
+                                            </td>
+                                            <td class="px-6 py-3 text-right font-semibold
+                                                {{ $esNegativo ? 'text-rose-600 dark:text-rose-400' : ($esBajo ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400') }}">
+                                                $ {{ number_format($item['restante'], 2, ',', '.') }}
+                                                @if ($esNegativo)
+                                                    <svg class="inline w-4 h-4 ml-1" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
+                                                @elseif ($esBajo)
+                                                    <svg class="inline w-4 h-4 ml-1" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
+                                                @endif
+                                            </td>
+                                        </tr>
+                                    @endforeach
+                                </tbody>
+                            </table>
+                        </div>
+                        @php
+                            $rubrosConExceso = collect($this->saldoPorRubro)->filter(fn($r) => $r['restante'] < -0.01);
+                        @endphp
+                        @if ($rubrosConExceso->isNotEmpty())
+                            <div class="px-6 py-3 bg-rose-50 dark:bg-rose-900/20 border-t border-rose-200 dark:border-rose-700/50">
+                                @foreach ($rubrosConExceso as $rubro)
+                                    <p class="text-sm text-rose-600 dark:text-rose-400">
+                                        <svg class="inline w-4 h-4 mr-1" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
+                                        El rubro "{{ $rubro['codigo_rubro'] }} - {{ $rubro['nombre_rubro'] }}" excede el saldo por $ {{ number_format(abs($rubro['restante']), 2, ',', '.') }}
+                                    </p>
+                                @endforeach
+                            </div>
+                        @endif
+                    </div>
+                @endif
+
                 {{-- Resumen totales --}}
                 <div class="bg-white dark:bg-gray-800 shadow-md rounded-lg p-6">
                     <h3 class="text-lg font-semibold text-gray-700 dark:text-gray-200 mb-4">Resumen Factura</h3>
@@ -1508,7 +1675,7 @@ new class extends Component
                         Nueva Factura
                     </button>
                     @if ($estadoFactura === 'borrador')
-                        <button type="button" wire:click="grabarFactura" wire:loading.attr="disabled" wire:loading.class="opacity-50" class="px-5 py-2.5 rounded-lg bg-violet-600 hover:bg-violet-700 text-white font-medium transition disabled:cursor-not-allowed">
+                        <button type="button" wire:click="grabarFactura" wire:loading.attr="disabled" wire:loading.class="opacity-50" {{ $this->hayExcesoSaldo ? 'disabled' : '' }} class="px-5 py-2.5 rounded-lg {{ $this->hayExcesoSaldo ? 'bg-gray-400 cursor-not-allowed' : 'bg-violet-600 hover:bg-violet-700' }} text-white font-medium transition disabled:cursor-not-allowed">
                             <span wire:loading.remove wire:target="grabarFactura">{{ $factura_id ? 'Actualizar Factura' : 'Grabar Factura' }}</span>
                             <span wire:loading wire:target="grabarFactura" class="flex items-center gap-2">
                                 <svg class="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>

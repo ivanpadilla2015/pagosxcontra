@@ -179,9 +179,12 @@ new class extends Component
             $facturasIds = [];
 
             // Revertir saldos: sumar de vuelta al movirubro
+            // IMPORTANTE: Siempre leer saldo_rubro desde la BD, NO del modelo Eloquent
+            // porque si hay múltiples detalles para el mismo movirubro, el modelo queda stale
             foreach ($pago->detalles as $detalle) {
                 if ($detalle->movirubro) {
-                    $nuevoSaldo = $detalle->movirubro->saldo_rubro + $detalle->valor_pagado;
+                    $saldoActual = Movirubro::where('id', $detalle->movirubro_id)->value('saldo_rubro');
+                    $nuevoSaldo = $saldoActual + $detalle->valor_pagado;
                     Movirubro::where('id', $detalle->movirubro_id)->update(['saldo_rubro' => $nuevoSaldo]);
                 }
 

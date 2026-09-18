@@ -15,6 +15,7 @@ class FacturaPdfController extends Controller
             'municipio',
             'dependencia',
             'lineas.itemcontrato.producto',
+            'lineas.producto',
             'lineas.municipio',
             'lineas.retenciones.retencion',
         ])->findOrFail($id);
@@ -67,7 +68,7 @@ class FacturaPdfController extends Controller
 
         $lineasPdf = $factura->lineas->map(function ($linea) {
             return [
-                'producto_nombre' => $linea->itemcontrato->producto->name ?? '-',
+                'producto_nombre' => $linea->itemcontrato->producto->name ?? $linea->producto->name ?? '-',
                 'tipo_adquisicion' => $linea->tipo_adquisicion,
                 'cantidad' => (float) $linea->cantidad,
                 'valor_costo_unit' => (float) ($linea->itemcontrato->valor_costo ?? 0),

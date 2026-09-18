@@ -121,6 +121,16 @@ new class extends Component
         $this->modalFacturas = true;
     }
 
+    public function toggleTodasFacturas(): void
+    {
+        $disponibles = $this->facturasDisponibles;
+        if (count($this->facturasSeleccionadas) === $disponibles->count()) {
+            $this->facturasSeleccionadas = [];
+        } else {
+            $this->facturasSeleccionadas = $disponibles->pluck('id')->toArray();
+        }
+    }
+
     public function cerrarModalFacturas(): void
     {
         $this->modalFacturas = false;
@@ -134,11 +144,11 @@ new class extends Component
             return;
         }
 
-        $facturas = Factura::with(['lineas.itemcontrato.movirubro', 'lineas.producto.uso'])->whereIn('id', $this->facturasSeleccionadas)->get();
+        $facturas = Factura::with(['lineas.itemcontrato.movirubro', 'lineas.movirubro.rubro', 'lineas.producto.uso'])->whereIn('id', $this->facturasSeleccionadas)->get();
 
         foreach ($facturas as $factura) {
             $agrupadas = $factura->lineas->groupBy(function ($linea) {
-                return $linea->itemcontrato->movirubro_id ?? 'sin_movirubro';
+                return $linea->movirubro_id ?? $linea->itemcontrato->movirubro_id ?? 'sin_movirubro';
             });
 
             foreach ($agrupadas as $movirubroId => $lineas) {
@@ -152,11 +162,11 @@ new class extends Component
                     'factura_id' => $factura->id,
                     'numero' => explode('-', $factura->numero)[1] ?? $factura->numero,
                     'fecha' => $factura->fecha->format('d/m/Y'),
-                    'rubro' => $primeraLinea->itemcontrato->rubro->codigo_rubro ?? '-',
+                    'rubro' => $primeraLinea->movirubro?->rubro->codigo_rubro ?? $primeraLinea->itemcontrato?->rubro->codigo_rubro ?? '-',
                     'valor' => $totalSinRetenciones,
-                    'movirubro_id' => $primeraLinea->itemcontrato->movirubro_id ?? null,
-                    'uso_id' => $primeraLinea->producto->uso_id ?? null,
-                    'rubro_id' => $primeraLinea->producto->rubro_id ?? null,
+                    'movirubro_id' => $primeraLinea->movirubro_id ?? $primeraLinea->itemcontrato?->movirubro_id ?? null,
+                    'uso_id' => $primeraLinea->uso_id ?? $primeraLinea->producto->uso_id ?? null,
+                    'rubro_id' => $primeraLinea->movirubro?->rubro_id ?? $primeraLinea->producto->rubro_id ?? null,
                 ];
             }
         }
@@ -343,6 +353,7 @@ new class extends Component
 
             // Recargar con relaciones
             $this->pago->load('detalles.factura.lineas.itemcontrato.movirubro');
+            $this->pago->load('detalles.factura.lineas.movirubro.rubro');
 
             // Agrupar deducciones por movirubro_id para validar el total antes de descontar
             $deducciones = [];
@@ -353,12 +364,13 @@ new class extends Component
                 $facturasIds[] = $factura->id;
 
                 foreach ($factura->lineas as $linea) {
-                    if ($linea->itemcontrato && $linea->itemcontrato->movirubro) {
-                        $movId = $linea->itemcontrato->movirubro_id;
+                    $movirubro = $linea->movirubro ?? $linea->itemcontrato?->movirubro;
+                    $movId = $linea->movirubro_id ?? $linea->itemcontrato?->movirubro_id;
 
+                    if ($movirubro && $movId) {
                         if (!isset($deducciones[$movId])) {
                             $deducciones[$movId] = [
-                                'movirubro' => $linea->itemcontrato->movirubro,
+                                'movirubro' => $movirubro,
                                 'total' => 0,
                             ];
                         }
@@ -600,7 +612,13 @@ new class extends Component
                     <table class="table-auto w-full mb-4">
                         <thead class="text-xs uppercase text-gray-400 dark:text-gray-500 font-semibold border-t border-gray-100 dark:border-gray-700/60">
                             <tr>
-                                <th class="px-4 py-3 text-center w-10"></th>
+                                <th class="px-4 py-3 text-center w-10">
+                                    @if ($disponibles->isNotEmpty())
+                                        <input type="checkbox" wire:click="toggleTodasFacturas"
+                                            {{ count($facturasSeleccionadas) === $disponibles->count() && $disponibles->isNotEmpty() ? 'checked' : '' }}
+                                            class="rounded border-gray-300 text-violet-500 focus:ring-violet-500" title="Seleccionar todas" />
+                                    @endif
+                                </th>
                                 <th class="px-4 py-3 text-left">Número</th>
                                 <th class="px-4 py-3 text-left">Fecha</th>
                                 <th class="px-4 py-3 text-right">Total</th>

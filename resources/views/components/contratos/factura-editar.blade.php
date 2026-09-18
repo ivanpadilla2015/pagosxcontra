@@ -61,7 +61,7 @@ new class extends Component
     public function mount(int $id): void
     {
         $this->facturaId = $id;
-        $this->factura = Factura::with(['proveedor', 'contrato', 'lineas.itemcontrato.producto', 'lineas.municipio', 'lineas.retenciones.retencion'])->findOrFail($id);
+        $this->factura = Factura::with(['proveedor', 'contrato', 'lineas.itemcontrato.producto', 'lineas.producto', 'lineas.municipio', 'lineas.retenciones.retencion'])->findOrFail($id);
 
         if ($this->factura->estado !== 'borrador') {
             session()->flash('error', 'Solo se pueden editar facturas en estado borrador.');
@@ -80,13 +80,15 @@ new class extends Component
         foreach ($this->factura->lineas as $linea) {
             $idx = count($this->lineas);
             $esAjuste = $linea->es_ajuste ?? false;
+            $sinItemcontrato = empty($linea->itemcontrato_id);
 
-            if ($esAjuste) {
-                // Línea de ajuste: usar valores guardados
+            if ($esAjuste || $sinItemcontrato) {
+                // Línea de ajuste o sencilla (sin itemcontrato): usar valores guardados
+                $productoNombre = $linea->itemcontrato->producto->name ?? ($linea->producto->name ?? '-');
                 $this->lineas[$idx] = [
                     'factura_linea_id' => $linea->id,
                     'itemcontrato_id' => $linea->itemcontrato_id,
-                    'producto_nombre' => $linea->itemcontrato->producto->name ?? '-',
+                    'producto_nombre' => $productoNombre,
                     'valor_costo_unit' => $linea->valor_base,
                     'iva_unit' => $linea->porcentaje_iva ?? 0,
                     'valor_iva_unit' => $linea->valor_iva,
@@ -98,7 +100,7 @@ new class extends Component
                     'valor_base' => $linea->valor_base,
                     'valor_iva' => $linea->valor_iva,
                     'valor_con_iva' => $linea->valor_con_iva,
-                    'es_ajuste' => true,
+                    'es_ajuste' => $esAjuste,
                     'porcentaje_iva' => $linea->porcentaje_iva,
                 ];
             } else {
@@ -188,10 +190,16 @@ new class extends Component
 
         $linea = $this->lineas[$idx];
 
-        // Para ajustes: usar producto_id directamente
-        $productoId = $linea['es_ajuste'] ?? false
-            ? ($this->factura->contrato->itemcontratos->firstWhere('producto_id', $linea['itemcontrato_id'] ?? null)?->producto_id ?? $linea['itemcontrato_id'] ?? null)
-            : Itemcontrato::find($linea['itemcontrato_id'])?->producto_id;
+        // Obtener producto_id según el tipo de línea
+        if ($linea['es_ajuste'] ?? false) {
+            $productoId = $this->factura->contrato->itemcontratos->firstWhere('producto_id', $linea['itemcontrato_id'] ?? null)?->producto_id ?? $linea['itemcontrato_id'] ?? null;
+        } elseif (empty($linea['itemcontrato_id'])) {
+            // Línea sencilla (sin itemcontrato): obtener producto_id desde la factura_linea original
+            $facturaLineaOriginal = FacturaLinea::find($linea['factura_linea_id'] ?? null);
+            $productoId = $facturaLineaOriginal?->producto_id;
+        } else {
+            $productoId = Itemcontrato::find($linea['itemcontrato_id'])?->producto_id;
+        }
 
         $facturaLinea = new FacturaLinea([
             'factura_id' => $this->facturaId,

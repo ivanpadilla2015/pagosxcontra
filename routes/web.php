@@ -60,6 +60,9 @@ Route::middleware(['auth:sanctum', 'verified'])->group(function () {
     // Facturar (nueva forma)
     Route::livewire('contratos/facturar/{id?}', 'contratos.facturar')->name('facturar');
 
+    // Facturación Sencilla
+    Route::livewire('contratos/facturacion-sencilla/{id?}', 'contratos.facturacion-sencilla')->name('facturacion.sencilla');
+
     // Actas de Recibo
     Route::livewire('contratos/actas', 'contratos.actas')->name('actas');
     Route::livewire('contratos/actas/{id}', 'contratos.acta-editar')->name('actas.editar');

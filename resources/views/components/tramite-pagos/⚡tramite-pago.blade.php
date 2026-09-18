@@ -236,7 +236,7 @@ new class extends Component
             $this->resultados_busqueda = [];
 
             $this->valor_inicial_contrato = $contrato->valorTotal;
-            $this->fecha_legalizacion = $contrato->fechacontrato?->format('Y-m-d');
+            $this->fecha_legalizacion = $contrato->fecha_inicio_contrato?->format('Y-m-d');
             $this->fecha_finalizacion = $contrato->fecha_fin_contrato?->format('Y-m-d');
             $this->contrato_interadministrativo = $contrato->contrainter->detalle ?? 'N/A';
             $this->registro_presupuestal = $contrato->registros->pluck('numero_reg')->implode(', ');

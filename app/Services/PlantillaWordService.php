@@ -123,6 +123,17 @@ class PlantillaWordService
             'cargo_directivo' => $t->cargo_directivo ?? '',
         ];
 
+        // Fechas múltiples de facturas para acta de entrega (index 2)
+        $facturasTramite = \App\Models\Factura::query()
+            ->join('detalle_pagos', 'detalle_pagos.factura_id', '=', 'facturas.id')
+            ->join('pagos', 'pagos.id', '=', 'detalle_pagos.pago_id')
+            ->where('pagos.contrato_id', $c->id)
+            ->where('pagos.cansecu_tramite', $t->numero_pago)
+            ->where('pagos.estado', 'cerrado')
+            ->select('facturas.*')
+            ->distinct()
+            ->get();
+
         // Documentos Soporte
         $soporte = $t->documentosSoporte->values();
         for ($i = 0; $i < 6; $i++) {
@@ -132,6 +143,34 @@ class PlantillaWordService
             $map["doc_soporte_fecha_{$num}"] = $doc?->fecha?->format('d/m/Y') ?? '';
             $map["doc_soporte_valor_{$num}"] = $doc?->valor ? '$' . number_format($doc->valor, 0, ',', '.') : '';
             $map["doc_soporte_folio_{$num}"] = $doc?->folio ? (string) $doc->folio : '';
+        }
+
+        // Acta de entrega (index 2): fechas de todas las facturas del trámite
+        if ($facturasTramite->count()) {
+            $map['doc_soporte_fecha_3'] = $facturasTramite
+                ->map(fn($f) => $f->fecha?->format('d/m/Y'))
+                ->filter()
+                ->unique()
+                ->implode(', ');
+        }
+
+        // Factura, cuenta de cobro (index 1): fechas de todas las facturas
+        if ($facturasTramite->count()) {
+            $map['doc_soporte_fecha_2'] = $facturasTramite
+                ->map(fn($f) => $f->fecha?->format('d/m/Y'))
+                ->filter()
+                ->unique()
+                ->implode(', ');
+        }
+
+        // MIGO MB51 (index 4): fechas_migo de facturas que tienen migo
+        $facturasConMigo = $facturasTramite->where('numero_migo', '!=', null);
+        if ($facturasConMigo->count()) {
+            $map['doc_soporte_fecha_5'] = $facturasConMigo
+                ->map(fn($f) => $f->fecha_migo?->format('d/m/Y'))
+                ->filter()
+                ->unique()
+                ->implode(', ');
         }
 
         // Documentos Expediente

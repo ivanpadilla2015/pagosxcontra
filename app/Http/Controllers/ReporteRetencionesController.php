@@ -99,6 +99,14 @@ class ReporteRetencionesController extends Controller
             $groupBy = 'facturas.id';
         }
 
+        // Subquery separada para totales de factura (evita duplicación por JOIN con retenciones)
+        $invoiceByGroup = (clone $invoiceQuery)->select(
+            $groupBy . ' as grupo_id',
+            DB::raw('COALESCE(SUM(factura_lineas.valor_base), 0) as sum_subtotal'),
+            DB::raw('COALESCE(SUM(factura_lineas.valor_iva), 0) as sum_iva'),
+            DB::raw('COALESCE(SUM(factura_lineas.valor_con_iva), 0) as sum_total')
+        )->groupBy($groupBy);
+
         $datos = $base->select(
                 $groupBy . ' as grupo_id',
                 DB::raw("SUM(CASE WHEN retenciones.name = 'Retefuente' THEN factura_linea_retenciones.valor_retenido ELSE 0 END) as retefuente"),
@@ -112,9 +120,20 @@ class ReporteRetencionesController extends Controller
             )
             ->groupBy($groupBy)
             ->orderByDesc('total_retenciones')
-            ->get()
-            ->map(function ($row) use ($tab) {
+            ->get();
+
+        // Obtener totales de factura por grupo (sin duplicación)
+        $totalesPorGrupo = $invoiceByGroup->get()->keyBy('grupo_id');
+
+        $datos = $datos->map(function ($row) use ($tab, $totalesPorGrupo) {
                 $row = (array) $row;
+
+                // Agregar subtotal, iva y total desde la subquery separada
+                $totales = $totalesPorGrupo->get($row['grupo_id']);
+                $row['sum_subtotal'] = $totales->sum_subtotal ?? 0;
+                $row['sum_iva'] = $totales->sum_iva ?? 0;
+                $row['sum_total'] = $totales->sum_total ?? 0;
+
                 if ($tab === 'contrato') {
                     $obj = \App\Models\Contrato::with('proveedor')->find($row['grupo_id']);
                     $row['nombre'] = $obj->numcontrato ?? '-';

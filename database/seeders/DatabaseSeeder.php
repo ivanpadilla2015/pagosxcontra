@@ -33,6 +33,7 @@ class DatabaseSeeder extends Seeder
             TiporegistroSeeder::class,
             ProductoSeeder::class,
             PlantillaDocumentoSeeder::class,
+            ProductoGenericoSeeder::class,
             UserSeeder::class,
             SettingSeeder::class,
         ]);

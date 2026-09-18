@@ -328,15 +328,26 @@ new class extends Component
         }
 
         $contrato = Contrato::find($this->contratoId);
-        if (!$contrato || !$contrato->fecha_inicio_contrato) {
+        if (!$contrato) {
             return;
+        }
+
+        // Si num_mes > 0, usar ese mes del año actual como punto de partida
+        // Si num_mes = 0, usar fecha_inicio_contrato (comportamiento original)
+        if ($contrato->num_mes > 0) {
+            $mesInicio = $contrato->num_mes;
+            $anioInicio = (int) now()->format('Y');
+        } else {
+            if (!$contrato->fecha_inicio_contrato) {
+                return;
+            }
+            $inicio = $contrato->fecha_inicio_contrato;
+            $mesInicio = (int) $inicio->format('m');
+            $anioInicio = (int) $inicio->format('Y');
         }
 
         $mesSeleccionado = (int) $this->mes_ejecucion;
         $anioSeleccionado = (int) explode('-', $this->fecha)[0];
-        $inicio = $contrato->fecha_inicio_contrato;
-        $mesInicio = (int) $inicio->format('m');
-        $anioInicio = (int) $inicio->format('Y');
 
         $mesesRequeridos = [];
         $anio = $anioInicio;

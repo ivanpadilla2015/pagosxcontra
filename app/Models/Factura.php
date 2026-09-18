@@ -11,11 +11,13 @@ class Factura extends Model
     protected $fillable = [
         'proveedor_id',
         'contrato_id',
+        'movirubro_id',
         'numero',
         'numero_migo',
         'fecha_migo',
         'fecha',
         'estado',
+        'tipo',
         'municipio_id',
         'dependencia_id',
         'nota_credito',

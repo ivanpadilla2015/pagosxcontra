@@ -74,7 +74,12 @@ class PdfpagosController extends Controller
 
         $pdf = Pdf::loadView('pdf.pdf_pagos', compact('data','ultreg','tcontrato','tsaldocontra',
                              'ejecutado', 'regpres','datoUso','datoreg','numreg','ferg','vareg'));
-        return $pdf->setPaper('letter')->stream();
+        $pdf->setPaper('letter');
+        $pdf->setOption('margin_left', 5);
+        $pdf->setOption('margin_right', 5);
+        $pdf->setOption('margin_top', 5);
+        $pdf->setOption('margin_bottom', 5);
+        return $pdf->stream();
     }
 
     public function imprimepdfinfo(Request $request)
