@@ -384,9 +384,20 @@ Grupo "Contratos" con sub-items: Obligación, Importar Obligaciones, Riesgos, Im
 
 ### Flujo de creación
 1. Usuario ingresa número de contrato → se muestra tabla de informes existentes ordenados por fecha descendente
-2. Se calcula automáticamente: `cansecu_infor` = último consecutivo + 1, `fecha` = hoy, `total_info` = suma pagos cerrados de ese consecutivo, `saldo_viene` = suma `total_info` de todos los informes anteriores, `%` = `(saldo_viene + total_info) / valorTotal * 100`
+2. Se calcula automáticamente: `cansecu_infor` = último consecutivo + 1, `fecha` = hoy, `total_info` = suma pagos cerrados de ese consecutivo, `saldo_viene` = ejecutado_externo (heredado de otra app) + suma `total_info` de todos los informes anteriores, `%` = `(saldo_viene + total_info) / valorTotal * 100`
 3. **Validación de meses faltantes**: si `mesEjecucion` tiene un mes anterior sin informe, se muestra error con botón "Crear informes faltantes"
-4. **Creación masiva**: crea informes para todos los meses faltantes con `total_info=0`, fecha = último día del mes (ajustado por fin de semana), `saldo_viene` = suma `total_info` de informes anteriores, `%` calculado. Luego mueve los pagos al consecutivo del último informe creado
+4. **Creación masiva**: crea informes para todos los meses faltantes con `total_info=0`, fecha = último día del mes (ajustado por fin de semana), `saldo_viene` = ejecutado_externo + suma `total_info` de informes anteriores, `%` calculado. Luego mueve los pagos al consecutivo del último informe creado
+
+### Fórmula de `saldo_viene` (incluye saldo heredado de otra aplicación)
+```
+ejecutado_externo = (valorTotal − saldo_movirubros) − SUM(pagos cerrados)
+saldo_viene = ejecutado_externo + SUM(informes.total_info anteriores no anulados)
+% = (saldo_viene + total_info) / valorTotal × 100
+```
+- `ejecutado_externo` se calcula automáticamente (no requiere campo en BD ni captura manual)
+- Es estable: al confirmar un pago, `saldo` baja y `pagos cerrados` sube en la misma cantidad
+- Si no hay saldo heredado, `ejecutado_externo = 0` (comportamiento normal)
+- Se recalcula en: `buscarContratoModal()`, `confirmarCrearMesesFaltantes()`, `save()` (servidor) y `openModal()` al editar
 
 ### Campos por defecto al crear
 - Novedad = "N/A", Fiducia = "N/A", InfoPersonal = "El servicio fue desarrollado por el personal asignado por la empresa sin novedad especial", InfoAIU = "Ninguna", Anexos = "Ninguno", Recomendacion = "Ninguna"
@@ -613,8 +624,8 @@ Grupo "Contratos" con sub-items: Obligación, Importar Obligaciones, Riesgos, Im
 - **Módulo de Informes** (`/informes/informes`): CRUD completo con validación de meses faltantes, creación masiva, y cálculo de % cumplimiento
 - **Validación de meses faltantes**: al intentar crear informe, si hay meses anteriores sin informe se bloquea con alerta y botón "Crear informes faltantes"
 - **Creación masiva de informes faltantes**: crea informes con `total_info=0`, `saldo_viene` acumulado desde la BD, `%` calculado, y fecha = último día del mes (ajustado por fin de semana). Cada informe copia obligaciones del contrato (`confirmar='NO'`) y riesgos. Mueve pagos al consecutivo del último informe creado
-- **Cálculo de % cumplimiento**: `ejecutado = saldo_viene + total_info`, `% = ejecutado / valorTotal * 100`. `saldo_viene` = `SUM(informes.total_info)` de informes anteriores (NO usa saldo del contrato)
-- **`saldo_viene` en informes**: suma de `total_info` de todos los informes anteriores (no anulados). Se persiste en BD para consulta histórica. En meses faltantes, `saldo_viene` se acumula desde la BD
+- **Cálculo de % cumplimiento**: `ejecutado = saldo_viene + total_info`, `% = ejecutado / valorTotal * 100`. `saldo_viene` = ejecutado_externo (heredado de otra app) + `SUM(informes.total_info)` de informes anteriores (NO usa saldo del contrato directamente)
+- **`saldo_viene` en informes**: ejecutado_externo + suma de `total_info` de todos los informes anteriores (no anulados). `ejecutado_externo = (valorTotal − saldo) − SUM(pagos cerrados)` detecta lo ejecutado en otra aplicación sin campo en BD. Se persiste en BD para consulta histórica. En meses faltantes, `saldo_viene` se acumula desde la BD con la misma fórmula. Recalculado en buscarContratoModal, meses faltantes, save() y edición
 - **Delete de informes**: botón visible en todos, pero solo permite eliminar el último consecutivo. Al eliminar, retrocede pagos con `cansecu_infor >= eliminado` usando `DB::raw('cansecu_infor - 1')`, luego borra `informeobligaciones`, `informeriesgos` e `informeregistros`
 - **Botón imprimir**: placeholder para reporte futuro (`imprimirInforme($id)`)
 - **Módulo de Dependencias/Comedores** (`/otros/dependencias`): CRUD completo con selects de municipio, regional y campo dirección
@@ -670,6 +681,10 @@ Grupo "Contratos" con sub-items: Obligación, Importar Obligaciones, Riesgos, Im
 - **PDF de factura con producto genérico**: `FacturaPdfController` obtiene nombre del producto desde `$linea->itemcontrato->producto->name ?? $linea->producto->name`. Eager loading incluye `lineas.producto`
 - **Bug corregido: "valor_costo on null" al editar facturas**: `facturacion.blade.php`, `facturar.blade.php` y `factura-editar.blade.php` ahora manejan `itemcontrato_id = null` en `cargarFactura()`, `calcularRetencionesLinea()`, `eliminarLinea()` y métodos de guardado. Líneas sin itemcontrato usan valores de la factura_linea original en vez de intentar acceder a `itemcontrato->valor_costo`
 - **Bug corregido: "movirubro relationship on null" en facturacion-sencilla**: `cargarFactura()` cargaba relación inexistente `movirubro` en Factura. Corregido a `contrato.movirubros.rubro`
+- **Bug corregido: impresión de pago "Attempt to read property rubro on null"**: al editar un registro presupuestal se borraban y recreaban los `movirubros` (IDs nuevos), pero las tablas son MyISAM (sin FK reales) y `detalle_pagos`/`pagodeterubros` quedaban con IDs huérfanos. Corregido: `update()` ahora actualiza **in-place** (conserva IDs). Reparados IDs huérfanos del contrato 010-026-2026 (13→15, 14→16) en `detalle_pagos`, `pagodeterubros`, `facturas`, `factura_lineas`
+- **Protección contra borrado de rubros referenciados**: `update()` y `delete()` en `registro`, `adicion-registro` y `reduccion-registro` verifican referencias en `detalle_pagos`, `pagodeterubros`, `itemcontratos`, `factura_lineas`, `facturas` y `traslados` antes de borrar un movirubro. Si está referenciado, bloquea con mensaje de error
+- **Null-safe en PDF de pagos**: `pdf_pagos.blade.php` usa `?->` y `?? '-'` en `movirubro`, `rubro`, `registro`, `uso`, `contrainter`, `proveedor`, firmas y plazo. `PdfpagosController` también protege `$ultreg->registro`
+- **Bug corregido: informes con saldo heredado de otra aplicación**: contratos creados con saldo ya ejecutado en otra app mostraban 0% en el primer informe. `saldo_viene` ahora incluye `ejecutado_externo = (valorTotal − saldo) − SUM(pagos cerrados)`. Contrato 010-026-2026 corregido: Agosto 0%→67,49%, Septiembre 25,4%→92,89% (queda 7,11%)
 
 ### ❌ Pendiente
 - Gestión de estados completa (borrador → emitida → pagada → anulada)
@@ -755,9 +770,9 @@ Grupo "Contratos" con sub-items: Obligación, Importar Obligaciones, Riesgos, Im
 34. **Snapshots históricos de pagos**: al guardar un pago (abierto), se captura el estado de TODOS los movirubros del contrato en `pagodeterubros` y sus registros en `pagodetaregistros`. Al confirmar (cerrado), se actualizan los `saldo_rubro` de los snapshots afectados. Esto permite consultar pagos antiguos y ver los saldos de esa fecha
 35. **Snapshots post-descuento**: los snapshots se crean SOLO al confirmar el pago (estado `cerrado`), no al guardar (abierto). `saldo_rubro` se lee de DB post-descuento. Registros se deduplican con `firstOrCreate` para evitar duplicados cuando varios movirubros apuntan al mismo registro
 36. **Confirmar pago: deduplicar facturas antes de iterar**: cuando una factura tiene múltiples detalles (agrupados por uso), el código de confirmación debe iterar facturas `unique('id')` para no descontar el saldo varias veces. Bug encontrado y corregido el 2026-08-01
-37. **% cumplimiento de informes**: se calcula desde lo informado (`saldo_viene + total_info`), NO desde el saldo del contrato. El saldo del contrato ya refleja pagos confirmados, así que usarlo daría resultados incorrectos para informes anteriores
+37. **% cumplimiento de informes**: se calcula desde lo informado (`saldo_viene + total_info`), NO directamente desde el saldo del contrato. `saldo_viene` sí incluye `ejecutado_externo` (lo heredado de otra app) para no arrancar en 0. El saldo del contrato ya refleja pagos confirmados, así que usarlo directamente daría resultados incorrectos para informes anteriores
 38. **Meses faltantes**: se validan al crear informe. Si faltan meses anteriores, se bloquea creación y se ofrece botón "Crear informes faltantes" que los crea masivamente con `total_info=0`
-39. **Creación masiva de informes faltantes**: fecha = último día del mes (ajustado por fin de semana), `saldo_viene` = suma `total_info` de informes anteriores (acumulativo), `%` calculado. Se mueven pagos al consecutivo del último informe creado
+39. **Creación masiva de informes faltantes**: fecha = último día del mes (ajustado por fin de semana), `saldo_viene` = ejecutado_externo + suma `total_info` de informes anteriores (acumulativo), `%` calculado. Se mueven pagos al consecutivo del último informe creado
 40. **Delete de informes**: botón visible en todos los informes, pero `confirmDelete()` solo permite eliminar el último consecutivo (compara `cansecu_infor` con `contrato.cansecu_infor`). Al eliminar, retrocede pagos con `cansecu_infor >= eliminado` en 1 posición (via `DB::raw('cansecu_infor - 1')`), luego borra `informeobligaciones`, `informeriesgos` e `informeregistros`
 41. **Documentos soporte en trámite**: se guardan en `tramite_pago_documentos` con datos reales de facturas/migos calculados en `llenarDocumentosConFacturas()`. El template Word usa placeholders `{{doc_soporte_nombre_N}}`, `{{doc_soporte_fecha_N}}`, `{{doc_soporte_valor_N}}`, `{{doc_soporte_folio_N}}`
 42. **Orden de documentos**: se mantiene con `orderBy('id')` tanto al cargar en `edit()` como en el servicio Word
@@ -807,3 +822,6 @@ Grupo "Contratos" con sub-items: Obligación, Importar Obligaciones, Riesgos, Im
 85. **`movirubro_id` en facturas**: columna nullable como respaldo para facturación sencilla. Se guarda tanto en `facturas` como en `factura_lineas` al crear/editar
 86. **Facturas sencillas en pagos**: `agregarFacturas()` y `confirmarPago()` en `pago-crear` y `pago-editar` usan `$linea->movirubro_id ?? $linea->itemcontrato?->movirubro_id` para agrupar. Rubro se obtiene de `$linea->movirubro?->rubro ?? $linea->itemcontrato?->rubro`
 87. **PDF con producto genérico**: `FacturaPdfController` usa `$linea->itemcontrato->producto->name ?? $linea->producto->name` para obtener el nombre. Eager loading incluye `lineas.producto`
+88. **Movirubros: update in-place en registros**: al editar registro/adición/reducción, los `movirubros` se **actualizan in-place** (conservan ID) en vez de borrar y recrear. Las tablas son MyISAM (sin FK reales), por lo que borrar rompía `detalle_pagos`, `pagodeterubros`, `facturas`, `factura_lineas` e `itemcontratos` con IDs huérfanos → error "rubro on null" al imprimir pagos. Solo se crea si el detalle es nuevo; solo se elimina si se quitó del form y NO está referenciado
+89. **Bloqueo de borrado de rubros referenciados**: antes de eliminar un movirubro (por edición o eliminación de registro completo), se verifica en `detalle_pagos`, `pagodeterubros`, `itemcontratos`, `factura_lineas`, `facturas` y `traslados`. Si tiene referencias, se bloquea con error en vez de dejar huérfanos
+90. **`saldo_viene` de informes incluye ejecución heredada**: `ejecutado_externo = (valorTotal − saldo_movirubros) − SUM(pagos cerrados)` detecta automáticamente lo ejecutado en otra aplicación. `saldo_viene = ejecutado_externo + SUM(informes anteriores)`. No requiere campo en BD ni captura manual. Estable: al confirmar pago, saldo baja y pagos suben en la misma cantidad. Aplica en `buscarContratoModal()`, `confirmarCrearMesesFaltantes()`, `save()` (recalculo en servidor) y `openModal()` al editar
