@@ -311,6 +311,31 @@ new class extends Component
         }
 
         $registro = Registro::findOrFail($this->registro_id);
+
+        $existingIds = $registro->movirubros()->pluck('id')->all();
+        $keepIds = [];
+        foreach ($this->detalles as $detalle) {
+            if (!empty($detalle['id'])) {
+                $keepIds[] = (int) $detalle['id'];
+            }
+        }
+        $toDelete = array_values(array_diff($existingIds, $keepIds));
+
+        if (!empty($toDelete)) {
+            $referenced = \App\Models\DetallePago::whereIn('movirubro_id', $toDelete)->exists()
+                || \App\Models\Pagodeterubro::whereIn('movirubro_id', $toDelete)->exists()
+                || \App\Models\Itemcontrato::whereIn('movirubro_id', $toDelete)->exists()
+                || \App\Models\FacturaLinea::whereIn('movirubro_id', $toDelete)->exists()
+                || \App\Models\Factura::whereIn('movirubro_id', $toDelete)->exists()
+                || \App\Models\Traslado::whereIn('movirubro_origen_id', $toDelete)->exists()
+                || \App\Models\Traslado::whereIn('movirubro_destino_id', $toDelete)->exists();
+
+            if ($referenced) {
+                session()->flash('error', 'No se puede eliminar un rubro que ya tiene facturas, pagos o traslados asociados.');
+                return;
+            }
+        }
+
         $registro->update([
             'numero_reg' => $this->numero_reg,
             'fecha_reg' => $this->fecha_reg,
@@ -321,17 +346,27 @@ new class extends Component
             'contrato_id' => $this->contrato_id,
         ]);
 
-        // Delete old movirubros and recreate
-        $registro->movirubros()->delete();
         foreach ($this->detalles as $detalle) {
-            Movirubro::create([
+            $payload = [
                 'registro_id' => $registro->id,
                 'rubro_id' => $detalle['rubro_id'],
                 'valor_rubro' => $detalle['valor_rubro'],
                 'saldo_rubro' => $detalle['saldo_rubro'],
                 'dependencia_afectacion' => $detalle['dependencia_afectacion'],
                 'contrato_id' => $this->contrato_id,
-            ]);
+            ];
+
+            if (!empty($detalle['id'])) {
+                Movirubro::where('id', $detalle['id'])
+                    ->where('registro_id', $registro->id)
+                    ->update($payload);
+            } else {
+                Movirubro::create($payload);
+            }
+        }
+
+        if (!empty($toDelete)) {
+            Movirubro::whereIn('id', $toDelete)->delete();
         }
 
         session()->flash('message', 'Registro actualizado exitosamente.');
@@ -349,6 +384,25 @@ new class extends Component
     public function delete()
     {
         $registro = Registro::findOrFail($this->confirmDeleteId);
+
+        $movIds = $registro->movirubros()->pluck('id')->all();
+        if (!empty($movIds)) {
+            $referenced = \App\Models\DetallePago::whereIn('movirubro_id', $movIds)->exists()
+                || \App\Models\Pagodeterubro::whereIn('movirubro_id', $movIds)->exists()
+                || \App\Models\Itemcontrato::whereIn('movirubro_id', $movIds)->exists()
+                || \App\Models\FacturaLinea::whereIn('movirubro_id', $movIds)->exists()
+                || \App\Models\Factura::whereIn('movirubro_id', $movIds)->exists()
+                || \App\Models\Traslado::whereIn('movirubro_origen_id', $movIds)->exists()
+                || \App\Models\Traslado::whereIn('movirubro_destino_id', $movIds)->exists();
+
+            if ($referenced) {
+                session()->flash('error', 'No se puede eliminar el registro porque sus rubros ya tienen facturas, pagos o traslados asociados.');
+                $this->confirmDeleteId = null;
+                $this->showDeleteModal = false;
+                return;
+            }
+        }
+
         $registro->movirubros()->delete();
         $registro->delete();
 

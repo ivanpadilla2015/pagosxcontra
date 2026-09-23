@@ -58,15 +58,18 @@ class PdfpagosController extends Controller
         $ferg= '';
         $vareg= '';
         if ($data->registrosSnapshot()->count() == 1) {
-            $fe = new DateTime($ultreg->registro->fecha_reg);
+            $fe = new DateTime($ultreg->registro->fecha_reg ?? 'now');
             $fe = $fe->format('d/m/Y');
-            $regpres= $ultreg->registro->numero_reg. ' de '.$fe;
-            $numreg = $ultreg->registro->numero_reg;
+            $regpres= ($ultreg->registro->numero_reg ?? '-'). ' de '.$fe;
+            $numreg = $ultreg->registro->numero_reg ?? '-';
             $ferg= $fe;
             $vareg= $data->registrosSnapshot()->sum('valor_reg');
         }else {
             foreach ($data->registrosSnapshot() as $value) {
-                $fe = new DateTime($value->registro->fecha_reg);
+                if (! $value->registro) {
+                    continue;
+                }
+                $fe = new DateTime($value->registro->fecha_reg ?? 'now');
                 $fe = $fe->format('d/m/Y');
                 $regpres .= $value->registro->numero_reg. ' / '.$fe.', ';
             }

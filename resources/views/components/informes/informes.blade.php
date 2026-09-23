@@ -254,11 +254,8 @@ new class extends Component
             ->where('cansecu_infor', $this->cansecu_infor)
             ->sum('valor_total');
 
-        // saldo_viene = suma de total_info de informes anteriores (no anulados)
-        $this->saldo_viene = Informe::where('contrato_id', $this->contratoId)
-            ->where('estado', '!=', 'anulado')
-            ->where('cansecu_infor', '<', $this->cansecu_infor)
-            ->sum('total_info');
+        // saldo_viene = ejecución heredada de otra app + suma de total_info de informes anteriores (no anulados)
+        $this->saldo_viene = $this->calcularSaldoViene($contrato, (int) $this->cansecu_infor);
 
         $this->novedad = 'N/A';
         $this->fiducia = 'N/A';
@@ -428,10 +425,18 @@ new class extends Component
         ];
 
         DB::transaction(function () use ($contrato, $contratoId, $userId, $mesesFaltantes, $meses) {
-            // saldo_viene inicial = suma de total_info de informes ya existentes (no anulados)
-            $saldoViene = Informe::where('contrato_id', $contratoId)
-                ->where('estado', '!=', 'anulado')
-                ->sum('total_info');
+            // saldo_viene inicial = ejecución heredada de otra app + suma de total_info de informes ya existentes (no anulados)
+            $totalPagosCerrados = (float) Pago::where('contrato_id', $contratoId)
+                ->where('estado', 'cerrado')
+                ->sum('valor_total');
+            $ejecutadoExterno = ($contrato->valorTotal - $contrato->saldo) - $totalPagosCerrados;
+            if ($ejecutadoExterno < 0) {
+                $ejecutadoExterno = 0;
+            }
+            $saldoViene = $ejecutadoExterno
+                + (float) Informe::where('contrato_id', $contratoId)
+                    ->where('estado', '!=', 'anulado')
+                    ->sum('total_info');
 
             foreach ($mesesFaltantes as $mesFaltante) {
                 // Parsear "Marzo 2026" → nombreMes=Marzo, anio=2026
@@ -544,8 +549,13 @@ new class extends Component
             $this->tramite_pago_id = $informe->tramite_pago_id;
             $this->estado = $informe->estado;
             $this->total_info = $informe->total_info;
-            $this->saldo_viene = $informe->saldo_viene;
-            $this->porcentaje_cumplimiento = $informe->porcentaje_cumplimiento;
+            // Recalcular saldo_viene y % al editar (incluye ejecución heredada de otra app)
+            $contratoEdit = $informe->contrato;
+            $this->saldo_viene = $this->calcularSaldoViene($contratoEdit, (int) $informe->cansecu_infor);
+            $ejecutadoEdit = $this->saldo_viene + (float) $this->total_info;
+            $this->porcentaje_cumplimiento = $contratoEdit->valorTotal > 0
+                ? round(($ejecutadoEdit / $contratoEdit->valorTotal) * 100, 2)
+                : 0;
             $this->mes_ejecucion = $informe->mes_ejecucion;
             $this->corresponde_texto_periodo = $informe->corresponde_texto_periodo;
             $this->novedad = $informe->novedad ?? '';
@@ -795,6 +805,31 @@ new class extends Component
         }
     }
 
+    /**
+     * Calcula el saldo que trae el informe:
+     * - ejecutado_externo: lo ejecutado en otra aplicación ANTES de usar esta app
+     *   = (valorTotal − saldo_movirubros) − SUM(pagos cerrados en esta app)
+     * - más la suma de total_info de informes anteriores no anulados
+     */
+    private function calcularSaldoViene(Contrato $contrato, int $cansecuInfor): float
+    {
+        $totalPagosCerrados = (float) Pago::where('contrato_id', $contrato->id)
+            ->where('estado', 'cerrado')
+            ->sum('valor_total');
+
+        $ejecutadoExterno = ($contrato->valorTotal - $contrato->saldo) - $totalPagosCerrados;
+        if ($ejecutadoExterno < 0) {
+            $ejecutadoExterno = 0;
+        }
+
+        $informesAnteriores = (float) Informe::where('contrato_id', $contrato->id)
+            ->where('estado', '!=', 'anulado')
+            ->where('cansecu_infor', '<', $cansecuInfor)
+            ->sum('total_info');
+
+        return $ejecutadoExterno + $informesAnteriores;
+    }
+
     public function save(): void
     {
         if (!$this->contratoId) {
@@ -837,6 +872,14 @@ new class extends Component
             'corresponde_texto_periodo' => ['required', 'string'],
         ]);
 
+        // Recalcular en servidor: saldo_viene (incluye ejecución heredada) y % cumplimiento
+        $contratoSave = Contrato::findOrFail($this->contratoId);
+        $saldoVieneCalc = $this->calcularSaldoViene($contratoSave, (int) $this->cansecu_infor);
+        $ejecutadoCalc = $saldoVieneCalc + (float) $this->total_info;
+        $porcentajeCalc = $contratoSave->valorTotal > 0
+            ? round(($ejecutadoCalc / $contratoSave->valorTotal) * 100, 2)
+            : 0;
+
         $data = [
             'cansecu_infor' => $this->cansecu_infor,
             'fecha' => $this->fecha,
@@ -844,8 +887,8 @@ new class extends Component
             'tramite_pago_id' => $this->tramite_pago_id ?: null,
             'estado' => $this->estado,
             'total_info' => $this->total_info,
-            'saldo_viene' => $this->saldo_viene,
-            'porcentaje_cumplimiento' => $this->porcentaje_cumplimiento,
+            'saldo_viene' => $saldoVieneCalc,
+            'porcentaje_cumplimiento' => $porcentajeCalc,
             'mes_ejecucion' => $this->mes_ejecucion,
             'corresponde_texto_periodo' => $this->corresponde_texto_periodo,
             'novedad' => $this->novedad ?: null,

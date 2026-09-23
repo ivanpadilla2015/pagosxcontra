@@ -283,14 +283,42 @@ new class extends Component
 
         $registro = Registro::findOrFail($this->registro_id);
 
-        // Restore saldo for old movirubros before updating
-        foreach ($registro->movirubros as $oldMovirubro) {
-            Movirubro::where('id', $oldMovirubro->movirubro_padre_id)
-                ->increment('saldo_rubro', $oldMovirubro->valor_rubro);
+        $existing = $registro->movirubros()->get()->keyBy('id');
+        $keepIds = [];
+        foreach ($this->detalles as $detalle) {
+            if (!empty($detalle['id']) && $existing->has($detalle['id'])) {
+                $keepIds[] = (int) $detalle['id'];
+            }
+        }
+        $toDeleteIds = $existing->keys()->diff($keepIds)->values()->all();
+
+        if (!empty($toDeleteIds)) {
+            $referenced = \App\Models\DetallePago::whereIn('movirubro_id', $toDeleteIds)->exists()
+                || \App\Models\Pagodeterubro::whereIn('movirubro_id', $toDeleteIds)->exists()
+                || \App\Models\Itemcontrato::whereIn('movirubro_id', $toDeleteIds)->exists()
+                || \App\Models\FacturaLinea::whereIn('movirubro_id', $toDeleteIds)->exists()
+                || \App\Models\Factura::whereIn('movirubro_id', $toDeleteIds)->exists()
+                || \App\Models\Traslado::whereIn('movirubro_origen_id', $toDeleteIds)->exists()
+                || \App\Models\Traslado::whereIn('movirubro_destino_id', $toDeleteIds)->exists();
+
+            if ($referenced) {
+                session()->flash('error', 'No se puede eliminar un rubro que ya tiene facturas, pagos o traslados asociados.');
+                return;
+            }
         }
 
-        // Delete old movirubros
-        $registro->movirubros()->delete();
+        // Restore saldo for old movirubros before updating
+        foreach ($registro->movirubros as $oldMovirubro) {
+            if ($oldMovirubro->movirubro_padre_id) {
+                Movirubro::where('id', $oldMovirubro->movirubro_padre_id)
+                    ->increment('saldo_rubro', $oldMovirubro->valor_rubro);
+            }
+        }
+
+        // Delete only movirubros no longer present in details
+        if (!empty($toDeleteIds)) {
+            Movirubro::whereIn('id', $toDeleteIds)->delete();
+        }
 
         $registro->update([
             'numero_reg' => $this->numero_reg,
@@ -302,21 +330,36 @@ new class extends Component
             'contrato_id' => $this->contrato_id,
         ]);
 
-        // Create new movirubros and update target movirubros' saldo
+        // Update existing movirubros in place (preserves IDs) or create new, then apply parent saldo
         foreach ($this->detalles as $detalle) {
-            Movirubro::create([
+            $payload = [
                 'registro_id' => $registro->id,
                 'rubro_id' => $detalle['rubro_id'],
                 'valor_rubro' => $detalle['valor_rubro'],
                 'saldo_rubro' => $detalle['valor_rubro'],
                 'dependencia_afectacion' => $detalle['dependencia_afectacion'],
                 'contrato_id' => $this->contrato_id,
-                'movirubro_padre_id' => $detalle['movirubro_id'],
-            ]);
+            ];
 
-            // Update target movirubro's saldo
-            Movirubro::where('id', $detalle['movirubro_id'])
-                ->decrement('saldo_rubro', $detalle['valor_rubro']);
+            if (!empty($detalle['id']) && $existing->has($detalle['id'])) {
+                $payload['movirubro_padre_id'] = $detalle['movirubro_id'] ?? null;
+                Movirubro::where('id', $detalle['id'])
+                    ->where('registro_id', $registro->id)
+                    ->update($payload);
+
+                if (!empty($detalle['movirubro_id'])) {
+                    Movirubro::where('id', $detalle['movirubro_id'])
+                        ->decrement('saldo_rubro', $detalle['valor_rubro']);
+                }
+            } else {
+                $payload['movirubro_padre_id'] = $detalle['movirubro_id'] ?? null;
+                Movirubro::create($payload);
+
+                if (!empty($detalle['movirubro_id'])) {
+                    Movirubro::where('id', $detalle['movirubro_id'])
+                        ->decrement('saldo_rubro', $detalle['valor_rubro']);
+                }
+            }
         }
 
         session()->flash('message', 'Reducción de registro actualizada exitosamente.');
@@ -335,10 +378,30 @@ new class extends Component
     {
         $registro = Registro::findOrFail($this->confirmDeleteId);
 
+        $movIds = $registro->movirubros()->pluck('id')->all();
+        if (!empty($movIds)) {
+            $referenced = \App\Models\DetallePago::whereIn('movirubro_id', $movIds)->exists()
+                || \App\Models\Pagodeterubro::whereIn('movirubro_id', $movIds)->exists()
+                || \App\Models\Itemcontrato::whereIn('movirubro_id', $movIds)->exists()
+                || \App\Models\FacturaLinea::whereIn('movirubro_id', $movIds)->exists()
+                || \App\Models\Factura::whereIn('movirubro_id', $movIds)->exists()
+                || \App\Models\Traslado::whereIn('movirubro_origen_id', $movIds)->exists()
+                || \App\Models\Traslado::whereIn('movirubro_destino_id', $movIds)->exists();
+
+            if ($referenced) {
+                session()->flash('error', 'No se puede eliminar la reducción porque sus rubros ya tienen facturas, pagos o traslados asociados.');
+                $this->confirmDeleteId = null;
+                $this->showDeleteModal = false;
+                return;
+            }
+        }
+
         // Restore saldo for target movirubros before deleting
         foreach ($registro->movirubros as $movirubro) {
-            Movirubro::where('id', $movirubro->movirubro_padre_id)
-                ->increment('saldo_rubro', $movirubro->valor_rubro);
+            if ($movirubro->movirubro_padre_id) {
+                Movirubro::where('id', $movirubro->movirubro_padre_id)
+                    ->increment('saldo_rubro', $movirubro->valor_rubro);
+            }
         }
 
         // Delete movirubros

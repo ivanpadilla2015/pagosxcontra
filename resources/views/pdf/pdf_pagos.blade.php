@@ -59,7 +59,7 @@
            </tr>
            <tr>
             <td class="coluyy"  style="background-color: #F5F5F5;"><strong>Nombre Contratista: </strong></td>
-            <td class="coluyy" colspan="2">{{ $data->contrato->proveedor->nombre }}</td>
+            <td class="coluyy2" colspan="2">{{ $data->contrato->proveedor?->nombre ?? '-' }}</td>
             <td class="coluyy" style="background-color: #F5F5F5;">RP RESERVA No</td>
             <td class="coluyy" ></td>
             <td class="coluyy" style="background-color: #F5F5F5;"  >VALOR</td>
@@ -83,13 +83,13 @@
         </tr>  
         <tr>
             <td class="colul" colspan="3" style="text-align: left; background-color: #F5F5F5; ">Con cargo al (los) contrato(s) interadministrativo(s)  No. /Convenio u otras</td>
-            <td class="colul" colspan="3"  >{{ $data->contrato->contrainter->detalle}}</td>
+            <td class="colul" colspan="3"  >{{ $data->contrato->contrainter?->detalle ?? '-'}}</td>
             <td class="colul"  style="text-align: center; background-color: #F5F5F5; ">Plazo Ejecucion</td>
-            <td class="colul" colspan="2">{{ $data->contrato->contrainter->plazoejecucion ?? ($ultreg->newplazoejecucion ? Carbon\Carbon::parse($ultreg->newplazoejecucion)->format('d/m/Y') : '-') }}</td>
+            <td class="colul" colspan="2">{{ $data->contrato->contrainter?->plazoejecucion ?? ($ultreg?->newplazoejecucion ? Carbon\Carbon::parse($ultreg->newplazoejecucion)->format('d/m/Y') : '-') }}</td>
         </tr>
         <tr>
             <td class="colul" colspan="2"  style="text-align: left; background-color: #F5F5F5; ">Celebrado(s) con:</td>
-            <td class="colul"  colspan="7">{{ $data->contrato->contrainter->concargo_a}}</td>
+            <td class="colul"  colspan="7">{{ $data->contrato->contrainter?->concargo_a ?? '-'}}</td>
         </tr>
         <tr>
             <td class="colu" colspan="9" style="text-align: center; "></td>>
@@ -126,11 +126,11 @@
           </tr>
           @foreach ($data->contrato->movirubros as $item)
           <tr>
-            <td class="colu" colspan="1" style="text-align: center;">{{$item->registro->numero_reg}}</td>
-            <td class="colul" colspan="2" style="text-align: center;">{{$item->rubro->codigo_rubro}}</td>
-            <td class="colul" colspan="2" style="text-align: center;">{{$item->rubro->nombre_rubro}}</td>
+            <td class="colu" colspan="1" style="text-align: center;">{{$item->registro->numero_reg ?? '-'}}</td>
+            <td class="colul" colspan="2" style="text-align: center;">{{$item->rubro->codigo_rubro ?? '-'}}</td>
+            <td class="colul" colspan="2" style="text-align: center;">{{$item->rubro->nombre_rubro ?? '-'}}</td>
             <td class="colu" colspan="2" style="text-align: center;">@if ($item->dependencia_afectacion){{$item->dependencia_afectacion;}}
-              @else {{$item->registro->dependencia_afectacion;}} @endif</td>
+              @else {{$item->registro->dependencia_afectacion ?? '-';}} @endif</td>
             <td class="colu" colspan="2" style="text-align: center;">{{number_format($item->valor_rubro, 2, ',', '.')}}</td>
           </tr> 
           @endforeach
@@ -178,11 +178,11 @@
               <tr>
                 <td class="colul">{{explode('-', $item->factura->numero)[1] ?? $item->factura->numero}} </td>
                 <td class="colul">{{ \Carbon\Carbon::parse($item->factura->fecha)->format('d/m/Y')}}</td>
-                <td class="colul">{{$item->movirubro->rubro->codigo_rubro}}</td>
-                <td class="colul">{{$item->uso->codigo_uso}}</td>
-                <td class="coluyy">{{$item->uso->nombre_uso}}</td>
-                <td class="colul">@if ($item->movirubro->dependencia_afectacion){{$item->movirubro->dependencia_afectacion;}}
-              @else {{$item->movirubro->registro->dependencia_afectacion;}} @endif</td>
+                <td class="colul">{{$item->movirubro?->rubro?->codigo_rubro ?? '-'}}</td>
+                <td class="colul">{{$item->uso->codigo_uso ?? '-'}}</td>
+                <td class="coluyy">{{$item->uso->nombre_uso ?? '-'}}</td>
+                <td class="colul">@if ($item->movirubro?->dependencia_afectacion){{$item->movirubro->dependencia_afectacion;}}
+              @else {{$item->movirubro?->registro?->dependencia_afectacion ?? '-';}} @endif</td>
                 <td class="colul" style="text-align: center;">{{number_format($item->valor_pagado, 2, ',', '.')}}</td>
                 <td class="colul" style="text-align: center;">{{number_format($item->valor_pagado, 2, ',', '.')}}</td>
                 <td class="colul" style="text-align: center;">{{ number_format($sald1 += $item->valor_pagado, 2, ',', '.') }}</td>
@@ -223,7 +223,7 @@
           @foreach ($data->registrosSnapshot as $item)
             @if ($item->tiporegistro_id > 1)
               <tr>
-                <td class="colul" colspan="2" style="background-color: #F5F5F5;">{{$item->tiporegistro->nombre_tipo_reg}}</td>
+                <td class="colul" colspan="2" style="background-color: #F5F5F5;">                {{$item->tiporegistro->nombre_tipo_reg ?? '-'}}</td>
                 <td class="colul" colspan="2" style="background-color: #F5F5F5;">{{$item->fecha_reg}}</td>
                 <td class="colul" colspan="3" style="background-color: #F5F5F5;"></td>
                 <td class="colul" colspan="2" style="background-color: #F5F5F5;">{{number_format($item->valor_reg, 2, ',', '.')}}</td>            
@@ -249,13 +249,13 @@
             <td class="coluy" >Firma Supervisor:</td>
             <td class="coluy" >_________________________</td>
             <td class="coluy" style="text-decoration: underline;" >Nombre de quien Revisa en Presupuesto:</td>
-            <td class="coluy" > {{$data->contrato->user->regional->presupuesto->jefe_presupueto}}</td>
+            <td class="coluy" > {{$data->contrato->user?->regional?->presupuesto?->jefe_presupueto ?? '-'}}</td>
             <td class="coluy">Nombre de quien Revisa en Cuentas por pagar y/o Contabilidad:</td>
             <td class="coluy" >_______________________ </td>
           </tr>
           <tr >
             <td class="coluy">Nombre del Supervisor:</td>
-            <td class="coluy" style="text-decoration: underline;" >{{$data->contrato->user->name}}</td>
+            <td class="coluy" style="text-decoration: underline;" >{{$data->contrato->user?->name ?? '-'}}</td>
             <td class="coluy">Fecha en que validan los Saldos "RP": </td>
             <td class="coluy" >{{"______________________"}}</td>
             <td class="coluy">Fecha:</td>
